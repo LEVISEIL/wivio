@@ -21,6 +21,7 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.database_path == Path("/tmp/test.sqlite3")
     assert settings.bot_mode == "polling"
     assert settings.max_video_size_bytes == 49 * 1024 * 1024
+    assert settings.inline_ready_wait_seconds == 12
     assert settings.debug is True
 
 
@@ -51,6 +52,7 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         logs_dir=Path("logs"),
         max_video_size_mb=49,
         inline_download_timeout=45,
+        inline_ready_wait_seconds=12,
         download_retries=2,
         upload_retries=2,
         rate_limit_per_minute=6,

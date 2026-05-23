@@ -9,6 +9,7 @@ User types in any Telegram chat:
 ```text
 @mybot https://tiktok.com/...
 @mybot https://instagram.com/reel/...
+@mybot https://instagram.com/p/...
 @mybot https://youtube.com/shorts/...
 ```
 
@@ -17,16 +18,15 @@ Flow:
 1. Bot receives an inline query.
 2. Bot detects the platform and normalizes the URL.
 3. If the URL exists in SQLite, bot returns `InlineQueryResultCachedVideo`.
-4. If the URL is new, bot downloads it with `yt-dlp`.
-5. Bot uploads the video to a hidden upload chat.
-6. Bot stores Telegram `file_id` in SQLite.
-7. Bot returns `InlineQueryResultCachedVideo`.
-8. User taps the result and Telegram sends the video instantly.
+4. If the URL is new, bot starts background processing and keeps the same inline query open for a short readiness window.
+5. If the video is ready during that window, bot returns `InlineQueryResultCachedVideo` in the same inline query.
+6. If it is still processing, bot returns a non-sendable loading status.
+7. User taps the cached result and Telegram sends the video instantly.
 
 ## Features
 
 - Telegram inline mode with class-based `InlineQueryHandler`
-- TikTok, Instagram Reels, and YouTube Shorts support
+- TikTok, Instagram Reels/video posts, and YouTube Shorts support
 - Automatic platform detection
 - Telegram `file_id` cache in SQLite
 - Async architecture with aiogram 3
@@ -35,6 +35,7 @@ Flow:
 - Retry for Telegram uploads and `yt-dlp` downloads
 - Anti-spam cooldown and per-minute rate limit middleware
 - Temporary file storage with cleanup scheduler
+- Same-query readiness wait for first-time downloads, with a non-sendable loading fallback
 - Thumbnail download and Telegram upload thumbnail support
 - Captions and inline result descriptions
 - File size limit
@@ -122,6 +123,7 @@ MAX_VIDEO_SIZE_MB=49
 RATE_LIMIT_PER_MINUTE=6
 COOLDOWN_SECONDS=0
 INLINE_DOWNLOAD_TIMEOUT=45
+INLINE_READY_WAIT_SECONDS=12
 ```
 
 For webhook mode:
@@ -215,7 +217,7 @@ Download events are also stored for simple operational diagnostics.
 - Keep `MAX_VIDEO_SIZE_MB` below Telegram bot limits for your deployment.
 - FFmpeg is included in Docker. For local PyCharm runs, the default downloader config avoids format merging so FFmpeg is not required for most videos.
 - Some Instagram/TikTok videos may require cookies or may be unavailable due to privacy, age, region, or anti-bot restrictions. This project keeps the service layer ready for adding `yt-dlp` cookie support later.
-- Inline queries have strict response timing. First-time downloads can time out for large or slow videos; cached videos are returned instantly.
+- Inline queries have strict response timing. First-time downloads are queued in the background and the bot waits up to `INLINE_READY_WAIT_SECONDS` to return the final video in the same inline query. If the video is still not ready after that, Telegram cannot auto-refresh the same popup, so the bot falls back to a non-sendable loading status.
 - Put the app behind Nginx/Caddy for HTTPS webhook deployments.
 
 ## Troubleshooting

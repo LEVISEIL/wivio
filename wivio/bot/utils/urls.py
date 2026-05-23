@@ -58,8 +58,8 @@ def parse_video_url(text: str) -> ParsedVideoUrl:
     if host in {"tiktok.com", "vm.tiktok.com", "vt.tiktok.com"} or host.endswith(".tiktok.com"):
         platform = Platform.TIKTOK
     elif host in {"instagram.com", "instagr.am"} or host.endswith(".instagram.com"):
-        if "/reel/" not in path and "/reels/" not in path:
-            raise UnsupportedUrlError("Only Instagram Reels links are supported.")
+        if not (path.startswith("/reel/") or path.startswith("/reels/") or path.startswith("/p/")):
+            raise UnsupportedUrlError("Only Instagram Reels and video posts are supported.")
         platform = Platform.INSTAGRAM
     elif host in {"youtube.com", "youtu.be"} or host.endswith(".youtube.com"):
         if "/shorts/" not in path and host != "youtu.be":

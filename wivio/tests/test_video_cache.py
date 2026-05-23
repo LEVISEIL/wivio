@@ -5,7 +5,7 @@ import pytest
 
 from bot.database.models import CachedVideo
 from bot.services.downloader import DownloadedVideo
-from bot.services.video_cache import VideoCacheService
+from bot.services.video_cache import FAILED_STATUS, VideoCacheService
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 
@@ -156,6 +156,30 @@ async def test_get_or_enqueue_queues_new_video_and_reuses_inflight_task(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_wait_for_cached_returns_video_after_inflight_task_finishes(tmp_path: Path) -> None:
+    videos = FakeVideoRepository()
+    events = FakeEventRepository()
+    downloader = FakeDownloader(downloaded_video(tmp_path))
+    uploader = FakeUploader()
+    service = VideoCacheService(videos, events, downloader, uploader, timeout_seconds=5)
+
+    result, status = await service.get_or_enqueue(parsed_url(), user_id=42)
+    assert result is None
+    assert status == "queued"
+
+    await asyncio.wait_for(downloader.started.wait(), timeout=1)
+    waiter = asyncio.create_task(
+        service.wait_for_cached(parsed_url(), user_id=42, timeout_seconds=1)
+    )
+
+    downloader.release.set()
+    cached = await asyncio.wait_for(waiter, timeout=1)
+
+    assert cached is not None
+    assert cached.telegram_file_id == "telegram-file-id"
+
+
+@pytest.mark.asyncio
 async def test_background_failure_is_logged_and_can_be_retried(tmp_path: Path) -> None:
     class FailingDownloader(FakeDownloader):
         async def download(self, parsed_url: ParsedVideoUrl) -> DownloadedVideo:
@@ -181,7 +205,5 @@ async def test_background_failure_is_logged_and_can_be_retried(tmp_path: Path) -
     result, status = await service.get_or_enqueue(parsed_url(), user_id=42)
 
     assert result is None
-    assert status == "queued"
-    task = next(iter(service._inflight.values()))
-    await asyncio.wait_for(task, timeout=1)
-    assert downloader.calls == 2
+    assert status == FAILED_STATUS
+    assert downloader.calls == 1

@@ -4,6 +4,8 @@ import asyncio
 import builtins
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
+from time import monotonic
 
 from bot.database.models import CachedVideo
 from bot.database.repositories import EventRepository, VideoRepository
@@ -13,6 +15,17 @@ from bot.services.uploader import TelegramUploader
 from bot.utils.urls import ParsedVideoUrl
 
 logger = logging.getLogger(__name__)
+
+FAILED_STATUS = "error"
+TIMEOUT_STATUS = "timeout"
+FAILURE_TTL_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class ProcessingFailure:
+    status: str
+    error: str
+    created_at: float
 
 
 class VideoCacheService:
@@ -31,6 +44,7 @@ class VideoCacheService:
         self.timeout_seconds = timeout_seconds
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._inflight: dict[str, asyncio.Task[None]] = {}
+        self._failures: dict[str, ProcessingFailure] = {}
 
     async def get_or_create(
         self,
@@ -39,6 +53,7 @@ class VideoCacheService:
     ) -> tuple[CachedVideo, bool]:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is not None:
+            self._failures.pop(parsed_url.normalized_url, None)
             logger.info(
                 "Cache hit normalized_url=%s user_id=%s",
                 parsed_url.normalized_url,
@@ -56,6 +71,7 @@ class VideoCacheService:
         async with lock:
             cached = await self.videos.get(parsed_url.normalized_url)
             if cached is not None:
+                self._failures.pop(parsed_url.normalized_url, None)
                 logger.info(
                     "Cache hit after wait normalized_url=%s user_id=%s",
                     parsed_url.normalized_url,
@@ -164,6 +180,23 @@ class VideoCacheService:
                 )
                 return None, "in_progress"
 
+            failure = self._get_recent_failure(parsed_url.normalized_url)
+            if failure is not None:
+                logger.info(
+                    "Recent video processing failure normalized_url=%s user_id=%s status=%s",
+                    parsed_url.normalized_url,
+                    user_id,
+                    failure.status,
+                )
+                await self.events.add(
+                    parsed_url.normalized_url,
+                    user_id,
+                    parsed_url.platform.value,
+                    failure.status,
+                    failure.error[:500],
+                )
+                return None, failure.status
+
             task = asyncio.create_task(
                 self._download_upload_store_and_log(parsed_url, user_id),
                 name=f"video-cache:{parsed_url.normalized_url}",
@@ -187,6 +220,57 @@ class VideoCacheService:
                 "queued",
             )
             return None, "queued"
+
+    async def wait_for_cached(
+        self,
+        parsed_url: ParsedVideoUrl,
+        user_id: int | None,
+        timeout_seconds: int | None = None,
+    ) -> CachedVideo | None:
+        cached = await self.videos.get(parsed_url.normalized_url)
+        if cached is not None:
+            logger.info(
+                "Cache became ready before wait normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
+            return cached
+
+        task = self._inflight.get(parsed_url.normalized_url)
+        if task is None:
+            logger.info(
+                "No in-flight task to wait for normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
+            return None
+
+        wait_timeout = timeout_seconds or self.timeout_seconds
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=wait_timeout)
+        except builtins.TimeoutError:
+            logger.info(
+                "Video is still processing after inline wait "
+                "normalized_url=%s user_id=%s timeout_seconds=%s",
+                parsed_url.normalized_url,
+                user_id,
+                wait_timeout,
+            )
+
+        cached = await self.videos.get(parsed_url.normalized_url)
+        if cached is None:
+            logger.info(
+                "Video is not cached yet after inline wait normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
+        else:
+            logger.info(
+                "Video is ready after inline wait normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
+        return cached
 
     async def _download_upload_and_store(self, parsed_url: ParsedVideoUrl) -> CachedVideo:
         logger.info(
@@ -212,6 +296,7 @@ class VideoCacheService:
             height=downloaded.height,
         )
         await self.videos.upsert(cached)
+        self._failures.pop(parsed_url.normalized_url, None)
         logger.info("Cached %s", parsed_url.normalized_url)
         return cached
 
@@ -226,6 +311,11 @@ class VideoCacheService:
                 timeout=self.timeout_seconds,
             )
         except builtins.TimeoutError as exc:
+            self._remember_failure(
+                parsed_url.normalized_url,
+                TIMEOUT_STATUS,
+                str(exc),
+            )
             await self.events.add(
                 parsed_url.normalized_url,
                 user_id,
@@ -235,6 +325,11 @@ class VideoCacheService:
             )
             logger.warning("Background processing timed out for %s", parsed_url.normalized_url)
         except Exception as exc:
+            self._remember_failure(
+                parsed_url.normalized_url,
+                FAILED_STATUS,
+                str(exc),
+            )
             await self.events.add(
                 parsed_url.normalized_url,
                 user_id,
@@ -254,6 +349,28 @@ class VideoCacheService:
                 "Background processing completed normalized_url=%s",
                 parsed_url.normalized_url,
             )
+
+    def _remember_failure(self, normalized_url: str, status: str, error: str) -> None:
+        self._failures[normalized_url] = ProcessingFailure(
+            status=status,
+            error=error[:500],
+            created_at=monotonic(),
+        )
+        logger.info(
+            "Remembered video processing failure normalized_url=%s status=%s",
+            normalized_url,
+            status,
+        )
+
+    def _get_recent_failure(self, normalized_url: str) -> ProcessingFailure | None:
+        failure = self._failures.get(normalized_url)
+        if failure is None:
+            return None
+        if monotonic() - failure.created_at > FAILURE_TTL_SECONDS:
+            self._failures.pop(normalized_url, None)
+            logger.info("Forgot expired processing failure normalized_url=%s", normalized_url)
+            return None
+        return failure
 
     def _forget_inflight(self, normalized_url: str, task: asyncio.Task[None]) -> None:
         if self._inflight.get(normalized_url) is task:

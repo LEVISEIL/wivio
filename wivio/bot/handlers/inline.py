@@ -7,12 +7,13 @@ from typing import Any
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.handlers import InlineQueryHandler
-from aiogram.types import InlineQuery
+from aiogram.types import InlineQuery, InlineQueryResultsButton
 
+from bot.database.models import CachedVideo
 from bot.services.errors import VideoBotError
-from bot.services.video_cache import VideoCacheService
+from bot.services.video_cache import FAILED_STATUS, TIMEOUT_STATUS, VideoCacheService
 from bot.utils.inline_results import article_result, cached_video_result
-from bot.utils.urls import UnsupportedUrlError, parse_video_url
+from bot.utils.urls import ParsedVideoUrl, UnsupportedUrlError, parse_video_url
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         inline_query: InlineQuery = self.event
         video_cache: VideoCacheService = self.data["video_cache"]
         cache_time: int = self.data["inline_cache_time"]
+        ready_wait_seconds: int = self.data["inline_ready_wait_seconds"]
 
         query = inline_query.query.strip()
         if not query:
@@ -33,9 +35,9 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                 results=[
                     article_result(
                         "empty",
-                        "Paste a video link",
-                        "Use inline mode with a TikTok, Instagram Reels, or YouTube Shorts URL.",
-                        "TikTok, Reels, and Shorts are supported",
+                        "Вставьте ссылку и дождитесь обработки видео",
+                        "Если ссылка уже вставлена, подождите несколько секунд.",
+                        "Поддерживаются TikTok, Reels, Instagram posts и Shorts",
                     )
                 ],
                 cache_time=1,
@@ -111,20 +113,38 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                 parsed.normalized_url,
                 status,
             )
-            await _answer_inline(
-                inline_query,
-                results=[
-                    article_result(
-                        _result_id(parsed.normalized_url, status),
-                        "Видео загружается",
-                        "Видео загружается. Подождите несколько секунд и обновите inline-запрос.",
-                        "Не отправляйте этот результат, дождитесь появления видео",
-                    )
-                ],
-                cache_time=1,
-                is_personal=True,
+            if status in {FAILED_STATUS, TIMEOUT_STATUS}:
+                await _answer_inline(
+                    inline_query,
+                    results=[],
+                    cache_time=0,
+                    is_personal=True,
+                    button=_failed_button(status),
+                )
+                return
+
+            cached = await _wait_for_inline_ready(
+                video_cache=video_cache,
+                parsed=parsed,
+                user_id=inline_query.from_user.id,
+                status=status,
+                ready_wait_seconds=ready_wait_seconds,
             )
-            return
+            if cached is not None:
+                logger.info(
+                    "Inline video became ready in same query user_id=%s normalized_url=%s",
+                    inline_query.from_user.id,
+                    cached.normalized_url,
+                )
+            else:
+                await _answer_inline(
+                    inline_query,
+                    results=[],
+                    cache_time=0,
+                    is_personal=True,
+                    button=_loading_button(),
+                )
+                return
 
         description = f"Cached | {cached.platform.replace('_', ' ').title()}"
         logger.info(
@@ -135,21 +155,65 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         )
         await _answer_inline(
             inline_query,
-            results=[
-                cached_video_result(
-                    result_id=_result_id(
-                        cached.normalized_url,
-                        cached.telegram_file_unique_id or "video",
-                    ),
-                    file_id=cached.telegram_file_id,
-                    title=cached.title,
-                    caption=cached.caption,
-                    description=description,
-                )
-            ],
+            results=[_cached_video_inline_result(cached, description)],
             cache_time=cache_time,
             is_personal=True,
         )
+
+
+async def _wait_for_inline_ready(
+    video_cache: VideoCacheService,
+    parsed: ParsedVideoUrl,
+    user_id: int,
+    status: str,
+    ready_wait_seconds: int,
+) -> CachedVideo | None:
+    if ready_wait_seconds <= 0:
+        return None
+
+    logger.info(
+        "Waiting for inline video readiness user_id=%s normalized_url=%s status=%s seconds=%s",
+        user_id,
+        parsed.normalized_url,
+        status,
+        ready_wait_seconds,
+    )
+    return await video_cache.wait_for_cached(
+        parsed,
+        user_id=user_id,
+        timeout_seconds=ready_wait_seconds,
+    )
+
+
+def _cached_video_inline_result(cached: CachedVideo, description: str) -> Any:
+    return cached_video_result(
+        result_id=_result_id(
+            cached.normalized_url,
+            cached.telegram_file_unique_id or "video",
+        ),
+        file_id=cached.telegram_file_id,
+        title=cached.title,
+        caption=cached.caption,
+        description=description,
+    )
+
+
+def _loading_button() -> InlineQueryResultsButton:
+    return InlineQueryResultsButton(
+        text="Видео обрабатывается. Обновите запрос через пару секунд",
+        start_parameter="loading",
+    )
+
+
+def _failed_button(status: str) -> InlineQueryResultsButton:
+    if status == TIMEOUT_STATUS:
+        text = "Видео обрабатывалось слишком долго. Попробуйте ещё раз"
+    else:
+        text = "Не удалось скачать. Возможно, нужен вход в Instagram"
+    return InlineQueryResultsButton(
+        text=text,
+        start_parameter=status,
+    )
 
 
 def _result_id(*parts: str) -> str:
@@ -162,15 +226,23 @@ async def _answer_inline(
     results: list[Any],
     cache_time: int,
     is_personal: bool,
+    button: InlineQueryResultsButton | None = None,
 ) -> None:
     try:
         await inline_query.answer(
             results=results,
             cache_time=cache_time,
             is_personal=is_personal,
+            button=button,
         )
     except TelegramBadRequest as exc:
-        if "query is too old" in str(exc).lower() or "query id is invalid" in str(exc).lower():
+        error_text = str(exc).lower()
+        if (
+            "query is too old" in error_text
+            or "query id is invalid" in error_text
+            or "query is already answered" in error_text
+            or "query was already answered" in error_text
+        ):
             logger.warning("Inline query expired before answer: %s", inline_query.id)
             return
         raise
