@@ -20,6 +20,12 @@ class CleanupScheduler:
         if self._task is None or self._task.done():
             self._stopped.clear()
             self._task = asyncio.create_task(self._run(), name="cleanup-scheduler")
+            logger.info(
+                "Cleanup scheduler started downloads_dir=%s ttl_seconds=%s interval_seconds=%s",
+                self.downloads_dir,
+                self.ttl_seconds,
+                self.interval_seconds,
+            )
 
     async def stop(self) -> None:
         self._stopped.set()
@@ -29,17 +35,25 @@ class CleanupScheduler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            logger.info("Cleanup scheduler stopped")
 
     async def _run(self) -> None:
         while not self._stopped.is_set():
-            await self.cleanup_once()
+            try:
+                await self.cleanup_once()
+            except Exception:
+                logger.exception("Cleanup scheduler iteration failed")
             try:
                 await asyncio.wait_for(self._stopped.wait(), timeout=self.interval_seconds)
             except asyncio.TimeoutError:
                 continue
 
     async def cleanup_once(self) -> None:
-        await asyncio.to_thread(self._cleanup_sync)
+        try:
+            await asyncio.to_thread(self._cleanup_sync)
+        except Exception:
+            logger.exception("Cleanup run failed")
+            raise
 
     def _cleanup_sync(self) -> None:
         self.downloads_dir.mkdir(parents=True, exist_ok=True)

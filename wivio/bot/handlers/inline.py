@@ -27,6 +27,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
 
         query = inline_query.query.strip()
         if not query:
+            logger.debug("Empty inline query user_id=%s", inline_query.from_user.id)
             await _answer_inline(
                 inline_query,
                 results=[
@@ -45,6 +46,12 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         try:
             parsed = parse_video_url(query)
         except UnsupportedUrlError as exc:
+            logger.info(
+                "Unsupported inline query user_id=%s query=%r error=%s",
+                inline_query.from_user.id,
+                query[:200],
+                exc,
+            )
             await _answer_inline(
                 inline_query,
                 results=[
@@ -98,6 +105,12 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             return
 
         if cached is None:
+            logger.info(
+                "Inline video is not ready yet user_id=%s normalized_url=%s status=%s",
+                inline_query.from_user.id,
+                parsed.normalized_url,
+                status,
+            )
             await _answer_inline(
                 inline_query,
                 results=[
@@ -114,6 +127,12 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             return
 
         description = f"Cached | {cached.platform.replace('_', ' ').title()}"
+        logger.info(
+            "Inline cached video result user_id=%s normalized_url=%s platform=%s",
+            inline_query.from_user.id,
+            cached.normalized_url,
+            cached.platform,
+        )
         await _answer_inline(
             inline_query,
             results=[

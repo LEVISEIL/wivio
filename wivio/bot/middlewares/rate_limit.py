@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
+import logging
 from time import monotonic
 from typing import Any
 
@@ -9,6 +10,8 @@ from aiogram import BaseMiddleware
 from aiogram.types import InlineQuery
 
 from bot.utils.inline_results import article_result
+
+logger = logging.getLogger(__name__)
 
 
 class InlineRateLimitMiddleware(BaseMiddleware):
@@ -29,6 +32,7 @@ class InlineRateLimitMiddleware(BaseMiddleware):
 
         last_seen = self._last_seen.get(user_id, 0)
         if now - last_seen < self.cooldown_seconds:
+            logger.info("Inline cooldown hit user_id=%s", user_id)
             await event.answer(
                 results=[
                     article_result(
@@ -48,6 +52,12 @@ class InlineRateLimitMiddleware(BaseMiddleware):
             hits.popleft()
 
         if len(hits) >= self.per_minute:
+            logger.warning(
+                "Inline rate limit hit user_id=%s hits=%s per_minute=%s",
+                user_id,
+                len(hits),
+                self.per_minute,
+            )
             await event.answer(
                 results=[
                     article_result(
