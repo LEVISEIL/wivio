@@ -61,7 +61,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             return
 
         try:
-            cached, was_cached = await video_cache.get_or_create(
+            cached, status = await video_cache.get_or_enqueue(
                 parsed,
                 user_id=inline_query.from_user.id,
             )
@@ -97,8 +97,23 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             )
             return
 
-        status = "Cached" if was_cached else "Ready"
-        description = f"{status} | {cached.platform.replace('_', ' ').title()}"
+        if cached is None:
+            await _answer_inline(
+                inline_query,
+                results=[
+                    article_result(
+                        _result_id(parsed.normalized_url, status),
+                        "Видео загружается",
+                        "Видео загружается. Подождите несколько секунд и обновите inline-запрос.",
+                        "Не отправляйте этот результат, дождитесь появления видео",
+                    )
+                ],
+                cache_time=1,
+                is_personal=True,
+            )
+            return
+
+        description = f"Cached | {cached.platform.replace('_', ' ').title()}"
         await _answer_inline(
             inline_query,
             results=[

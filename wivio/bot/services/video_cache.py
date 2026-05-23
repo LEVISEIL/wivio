@@ -29,6 +29,7 @@ class VideoCacheService:
         self.uploader = uploader
         self.timeout_seconds = timeout_seconds
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._inflight: dict[str, asyncio.Task[None]] = {}
 
     async def get_or_create(
         self,
@@ -89,6 +90,62 @@ class VideoCacheService:
             )
             return result, False
 
+    async def get_or_enqueue(
+        self,
+        parsed_url: ParsedVideoUrl,
+        user_id: int | None,
+    ) -> tuple[CachedVideo | None, str]:
+        cached = await self.videos.get(parsed_url.normalized_url)
+        if cached is not None:
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                "cache_hit",
+            )
+            return cached, "cached"
+
+        lock = self._locks[parsed_url.normalized_url]
+        async with lock:
+            cached = await self.videos.get(parsed_url.normalized_url)
+            if cached is not None:
+                await self.events.add(
+                    parsed_url.normalized_url,
+                    user_id,
+                    parsed_url.platform.value,
+                    "cache_hit_after_wait",
+                )
+                return cached, "cached"
+
+            task = self._inflight.get(parsed_url.normalized_url)
+            if task is not None and not task.done():
+                await self.events.add(
+                    parsed_url.normalized_url,
+                    user_id,
+                    parsed_url.platform.value,
+                    "in_progress",
+                )
+                return None, "in_progress"
+
+            task = asyncio.create_task(
+                self._download_upload_store_and_log(parsed_url, user_id),
+                name=f"video-cache:{parsed_url.normalized_url}",
+            )
+            self._inflight[parsed_url.normalized_url] = task
+            task.add_done_callback(
+                lambda done_task, url=parsed_url.normalized_url: self._forget_inflight(
+                    url,
+                    done_task,
+                )
+            )
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                "queued",
+            )
+            return None, "queued"
+
     async def _download_upload_and_store(self, parsed_url: ParsedVideoUrl) -> CachedVideo:
         downloaded = await self.downloader.download(parsed_url)
         file_id, file_unique_id = await self.uploader.upload(downloaded)
@@ -110,3 +167,43 @@ class VideoCacheService:
         await self.videos.upsert(cached)
         logger.info("Cached %s", parsed_url.normalized_url)
         return cached
+
+    async def _download_upload_store_and_log(
+        self,
+        parsed_url: ParsedVideoUrl,
+        user_id: int | None,
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                self._download_upload_and_store(parsed_url),
+                timeout=self.timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                "timeout",
+                str(exc),
+            )
+            logger.warning("Background processing timed out for %s", parsed_url.normalized_url)
+        except Exception as exc:
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                "error",
+                str(exc)[:500],
+            )
+            logger.exception("Background processing failed for %s", parsed_url.normalized_url)
+        else:
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                "created",
+            )
+
+    def _forget_inflight(self, normalized_url: str, task: asyncio.Task[None]) -> None:
+        if self._inflight.get(normalized_url) is task:
+            self._inflight.pop(normalized_url, None)
