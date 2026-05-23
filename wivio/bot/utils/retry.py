@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 async def retry_async(
@@ -20,6 +23,12 @@ async def retry_async(
             last_error = exc
             if attempt == attempts - 1:
                 break
+            logger.warning(
+                "Async operation failed; retrying attempt=%s max_attempts=%s error=%s",
+                attempt + 1,
+                max(1, attempts),
+                exc,
+            )
             await asyncio.sleep(base_delay * (2**attempt))
 
     assert last_error is not None

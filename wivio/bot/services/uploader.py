@@ -21,6 +21,12 @@ class TelegramUploader:
     async def upload(self, video: DownloadedVideo) -> tuple[str, str | None]:
         async def operation() -> tuple[str, str | None]:
             thumbnail = FSInputFile(video.thumbnail_path) if video.thumbnail_path else None
+            logger.info(
+                "Uploading video to Telegram normalized_url=%s upload_chat_id=%s size=%s",
+                video.normalized_url,
+                self.upload_chat_id,
+                video.file_size,
+            )
             message = await self.bot.send_video(
                 chat_id=self.upload_chat_id,
                 video=FSInputFile(video.video_path),
@@ -33,12 +39,17 @@ class TelegramUploader:
                 height=video.height,
             )
             if message.video is None:
+                logger.error(
+                    "Telegram upload returned no video object normalized_url=%s",
+                    video.normalized_url,
+                )
                 raise UploadError("Telegram did not return a video object")
             return message.video.file_id, message.video.file_unique_id
 
         try:
             file_id, file_unique_id = await retry_async(operation, attempts=self.retries)
         except Exception as exc:
+            logger.exception("Telegram upload failed normalized_url=%s", video.normalized_url)
             raise UploadError(str(exc)) from exc
 
         logger.info("Uploaded %s to Telegram file_id=%s", video.normalized_url, file_id[:16])

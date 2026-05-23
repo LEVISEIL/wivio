@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from hashlib import sha1
 import logging
+from hashlib import sha1
 from typing import Any
 
 from aiogram import Router
@@ -27,6 +27,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
 
         query = inline_query.query.strip()
         if not query:
+            logger.debug("Empty inline query user_id=%s", inline_query.from_user.id)
             await _answer_inline(
                 inline_query,
                 results=[
@@ -45,6 +46,12 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         try:
             parsed = parse_video_url(query)
         except UnsupportedUrlError as exc:
+            logger.info(
+                "Unsupported inline query user_id=%s query=%r error=%s",
+                inline_query.from_user.id,
+                query[:200],
+                exc,
+            )
             await _answer_inline(
                 inline_query,
                 results=[
@@ -61,7 +68,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             return
 
         try:
-            cached, was_cached = await video_cache.get_or_create(
+            cached, status = await video_cache.get_or_enqueue(
                 parsed,
                 user_id=inline_query.from_user.id,
             )
@@ -97,13 +104,43 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             )
             return
 
-        status = "Cached" if was_cached else "Ready"
-        description = f"{status} | {cached.platform.replace('_', ' ').title()}"
+        if cached is None:
+            logger.info(
+                "Inline video is not ready yet user_id=%s normalized_url=%s status=%s",
+                inline_query.from_user.id,
+                parsed.normalized_url,
+                status,
+            )
+            await _answer_inline(
+                inline_query,
+                results=[
+                    article_result(
+                        _result_id(parsed.normalized_url, status),
+                        "Видео загружается",
+                        "Видео загружается. Подождите несколько секунд и обновите inline-запрос.",
+                        "Не отправляйте этот результат, дождитесь появления видео",
+                    )
+                ],
+                cache_time=1,
+                is_personal=True,
+            )
+            return
+
+        description = f"Cached | {cached.platform.replace('_', ' ').title()}"
+        logger.info(
+            "Inline cached video result user_id=%s normalized_url=%s platform=%s",
+            inline_query.from_user.id,
+            cached.normalized_url,
+            cached.platform,
+        )
         await _answer_inline(
             inline_query,
             results=[
                 cached_video_result(
-                    result_id=_result_id(cached.normalized_url, cached.telegram_file_unique_id or "video"),
+                    result_id=_result_id(
+                        cached.normalized_url,
+                        cached.telegram_file_unique_id or "video",
+                    ),
                     file_id=cached.telegram_file_id,
                     title=cached.title,
                     caption=cached.caption,

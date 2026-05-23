@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
-import logging
 
 import aiofiles
 import aiohttp
@@ -47,6 +47,11 @@ class VideoDownloader:
     async def download(self, parsed_url: ParsedVideoUrl) -> DownloadedVideo:
         job_dir = self.downloads_dir / uuid4().hex
         job_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(
+            "Starting download normalized_url=%s job_dir=%s",
+            parsed_url.normalized_url,
+            job_dir,
+        )
 
         try:
             info, video_path = await asyncio.to_thread(
@@ -55,12 +60,27 @@ class VideoDownloader:
                 job_dir,
             )
         except YtDlpDownloadError as exc:
+            logger.warning(
+                "yt-dlp failed normalized_url=%s error=%s",
+                parsed_url.normalized_url,
+                exc,
+            )
             raise DownloadError(str(exc)) from exc
         except Exception as exc:
+            logger.exception(
+                "Unexpected download failure normalized_url=%s",
+                parsed_url.normalized_url,
+            )
             raise DownloadError(str(exc)) from exc
 
         size = video_path.stat().st_size
         if size > self.max_video_size_bytes:
+            logger.warning(
+                "Downloaded file is too large normalized_url=%s size=%s max_size=%s",
+                parsed_url.normalized_url,
+                size,
+                self.max_video_size_bytes,
+            )
             raise FileTooLargeError(
                 f"Downloaded file is {size} bytes, max is {self.max_video_size_bytes}"
             )
@@ -113,12 +133,19 @@ class VideoDownloader:
             "restrictfilenames": True,
         }
 
-        with YoutubeDL(options) as ydl:
-            info = ydl.extract_info(url, download=True)
+        try:
+            with YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+        except Exception:
+            logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
+            raise
 
         candidates = [path for path in downloaded if path.exists()]
-        candidates.extend(path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() != ".jpg")
+        candidates.extend(
+            path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() != ".jpg"
+        )
         if not candidates:
+            logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
             raise DownloadError("yt-dlp did not produce a video file")
 
         video_path = max(candidates, key=lambda path: path.stat().st_size)
@@ -126,6 +153,7 @@ class VideoDownloader:
 
     async def _download_thumbnail(self, url: str | None, job_dir: Path) -> Path | None:
         if not url:
+            logger.debug("No thumbnail URL available for job_dir=%s", job_dir)
             return None
 
         thumbnail_path = job_dir / "thumbnail.jpg"
@@ -134,12 +162,19 @@ class VideoDownloader:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status >= 400:
+                        logger.warning(
+                            "Thumbnail request failed url=%s status=%s",
+                            url,
+                            response.status,
+                        )
                         return None
                     content = await response.read()
             if not content:
+                logger.warning("Thumbnail request returned empty body url=%s", url)
                 return None
             async with aiofiles.open(thumbnail_path, "wb") as file:
                 await file.write(content)
+            logger.info("Downloaded thumbnail url=%s path=%s", url, thumbnail_path)
             return thumbnail_path
         except Exception as exc:
             logger.warning("Could not download thumbnail %s: %s", url, exc)
@@ -150,15 +185,12 @@ def build_caption(title: str, platform: str, url: str) -> str:
     platform_title = platform.replace("_", " ").title()
     safe_title = html_escape(title)[:300]
     safe_url = html_escape(url)
-    return f"<b>{safe_title}</b>\n\n{platform_title} | <a href=\"{safe_url}\">source</a>"
+    return f'<b>{safe_title}</b>\n\n{platform_title} | <a href="{safe_url}">source</a>'
 
 
 def html_escape(value: str) -> str:
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

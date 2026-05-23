@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-import re
 
 
 class Platform(StrEnum):

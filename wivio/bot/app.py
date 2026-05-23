@@ -20,9 +20,11 @@ logger = logging.getLogger(__name__)
 
 
 async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, CleanupScheduler]:
+    logger.info("Preparing runtime directories")
     settings.downloads_dir.mkdir(parents=True, exist_ok=True)
     settings.logs_dir.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Creating Telegram bot client")
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode="HTML"),
@@ -32,6 +34,7 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
     database = Database(settings.database_path)
     await database.connect()
     await database.migrate()
+    logger.info("Database is connected and migrated: %s", settings.database_path)
 
     video_repo = VideoRepository(database.connection)
     event_repo = EventRepository(database.connection)
@@ -78,6 +81,7 @@ async def _validate_upload_chat(bot: Bot, upload_chat_id: int) -> None:
     try:
         chat = await bot.get_chat(upload_chat_id)
     except TelegramAPIError as exc:
+        logger.exception("Upload chat validation failed for chat_id=%s", upload_chat_id)
         await bot.session.close()
         raise RuntimeError(
             "UPLOAD_CHAT_ID is not available for this bot. "

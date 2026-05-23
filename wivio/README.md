@@ -154,6 +154,21 @@ Healthcheck:
 http://127.0.0.1:8080/healthz
 ```
 
+## Tests
+
+Install development dependencies and run the test suite:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Run the full local check before committing:
+
+```bash
+make check
+```
+
 ## Docker Run
 
 ```bash
