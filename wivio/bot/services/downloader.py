@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from pathlib import Path
+from uuid import uuid4
+import logging
+
+import aiofiles
+import aiohttp
+from yt_dlp import DownloadError as YtDlpDownloadError
+from yt_dlp import YoutubeDL
+
+from bot.services.errors import DownloadError, FileTooLargeError
+from bot.utils.urls import ParsedVideoUrl
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DownloadedVideo:
+    original_url: str
+    normalized_url: str
+    platform: str
+    video_path: Path
+    thumbnail_path: Path | None
+    thumbnail_url: str | None
+    title: str
+    caption: str
+    duration: int | None
+    width: int | None
+    height: int | None
+    file_size: int
+
+
+class VideoDownloader:
+    def __init__(
+        self,
+        downloads_dir: Path,
+        max_video_size_bytes: int,
+        retries: int,
+    ) -> None:
+        self.downloads_dir = downloads_dir
+        self.max_video_size_bytes = max_video_size_bytes
+        self.retries = retries
+
+    async def download(self, parsed_url: ParsedVideoUrl) -> DownloadedVideo:
+        job_dir = self.downloads_dir / uuid4().hex
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            info, video_path = await asyncio.to_thread(
+                self._download_sync,
+                parsed_url.original_url,
+                job_dir,
+            )
+        except YtDlpDownloadError as exc:
+            raise DownloadError(str(exc)) from exc
+        except Exception as exc:
+            raise DownloadError(str(exc)) from exc
+
+        size = video_path.stat().st_size
+        if size > self.max_video_size_bytes:
+            raise FileTooLargeError(
+                f"Downloaded file is {size} bytes, max is {self.max_video_size_bytes}"
+            )
+
+        thumbnail_url = _clean_string(info.get("thumbnail"))
+        thumbnail_path = await self._download_thumbnail(thumbnail_url, job_dir)
+
+        title = _clean_string(info.get("title")) or f"{parsed_url.platform.value.title()} video"
+        uploader = _clean_string(info.get("uploader") or info.get("channel"))
+        webpage_url = _clean_string(info.get("webpage_url")) or parsed_url.normalized_url
+        caption = build_caption(title=title, platform=parsed_url.platform.value, url=webpage_url)
+        description = f"{parsed_url.platform.value.replace('_', ' ').title()}"
+        if uploader:
+            description = f"{description} by {uploader}"
+
+        logger.info("Downloaded %s to %s", parsed_url.normalized_url, video_path)
+        return DownloadedVideo(
+            original_url=parsed_url.original_url,
+            normalized_url=parsed_url.normalized_url,
+            platform=parsed_url.platform.value,
+            video_path=video_path,
+            thumbnail_path=thumbnail_path,
+            thumbnail_url=thumbnail_url,
+            title=title,
+            caption=caption,
+            duration=_optional_int(info.get("duration")),
+            width=_optional_int(info.get("width")),
+            height=_optional_int(info.get("height")),
+            file_size=size,
+        )
+
+    def _download_sync(self, url: str, job_dir: Path) -> tuple[dict, Path]:
+        downloaded: list[Path] = []
+
+        def hook(data: dict) -> None:
+            if data.get("status") == "finished" and data.get("filename"):
+                downloaded.append(Path(data["filename"]))
+
+        options = {
+            "outtmpl": str(job_dir / "%(extractor_key)s-%(id)s.%(ext)s"),
+            "format": "b[ext=mp4]/best[ext=mp4]/best",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "retries": self.retries,
+            "fragment_retries": self.retries,
+            "socket_timeout": 20,
+            "max_filesize": self.max_video_size_bytes,
+            "progress_hooks": [hook],
+            "restrictfilenames": True,
+        }
+
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+
+        candidates = [path for path in downloaded if path.exists()]
+        candidates.extend(path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() != ".jpg")
+        if not candidates:
+            raise DownloadError("yt-dlp did not produce a video file")
+
+        video_path = max(candidates, key=lambda path: path.stat().st_size)
+        return info, video_path
+
+    async def _download_thumbnail(self, url: str | None, job_dir: Path) -> Path | None:
+        if not url:
+            return None
+
+        thumbnail_path = job_dir / "thumbnail.jpg"
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status >= 400:
+                        return None
+                    content = await response.read()
+            if not content:
+                return None
+            async with aiofiles.open(thumbnail_path, "wb") as file:
+                await file.write(content)
+            return thumbnail_path
+        except Exception as exc:
+            logger.warning("Could not download thumbnail %s: %s", url, exc)
+            return None
+
+
+def build_caption(title: str, platform: str, url: str) -> str:
+    platform_title = platform.replace("_", " ").title()
+    safe_title = html_escape(title)[:300]
+    safe_url = html_escape(url)
+    return f"<b>{safe_title}</b>\n\n{platform_title} | <a href=\"{safe_url}\">source</a>"
+
+
+def html_escape(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _clean_string(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
