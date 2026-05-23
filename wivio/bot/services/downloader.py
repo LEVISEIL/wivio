@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
-import logging
 
 import aiofiles
 import aiohttp
@@ -67,7 +67,10 @@ class VideoDownloader:
             )
             raise DownloadError(str(exc)) from exc
         except Exception as exc:
-            logger.exception("Unexpected download failure normalized_url=%s", parsed_url.normalized_url)
+            logger.exception(
+                "Unexpected download failure normalized_url=%s",
+                parsed_url.normalized_url,
+            )
             raise DownloadError(str(exc)) from exc
 
         size = video_path.stat().st_size
@@ -139,9 +142,7 @@ class VideoDownloader:
 
         candidates = [path for path in downloaded if path.exists()]
         candidates.extend(
-            path
-            for path in job_dir.iterdir()
-            if path.is_file() and path.suffix.lower() != ".jpg"
+            path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() != ".jpg"
         )
         if not candidates:
             logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
@@ -161,7 +162,11 @@ class VideoDownloader:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status >= 400:
-                        logger.warning("Thumbnail request failed url=%s status=%s", url, response.status)
+                        logger.warning(
+                            "Thumbnail request failed url=%s status=%s",
+                            url,
+                            response.status,
+                        )
                         return None
                     content = await response.read()
             if not content:
@@ -180,15 +185,12 @@ def build_caption(title: str, platform: str, url: str) -> str:
     platform_title = platform.replace("_", " ").title()
     safe_title = html_escape(title)[:300]
     safe_url = html_escape(url)
-    return f"<b>{safe_title}</b>\n\n{platform_title} | <a href=\"{safe_url}\">source</a>"
+    return f'<b>{safe_title}</b>\n\n{platform_title} | <a href="{safe_url}">source</a>'
 
 
 def html_escape(value: str) -> str:
     return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

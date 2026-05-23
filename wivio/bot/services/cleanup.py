@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class CleanupScheduler:
                 logger.exception("Cleanup scheduler iteration failed")
             try:
                 await asyncio.wait_for(self._stopped.wait(), timeout=self.interval_seconds)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def cleanup_once(self) -> None:

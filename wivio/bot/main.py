@@ -30,7 +30,12 @@ async def run_polling() -> None:
         await site.start()
         cleanup.start()
         await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Polling started. Healthcheck: http://%s:%s%s", settings.host, settings.port, settings.healthcheck_path)
+        logger.info(
+            "Polling started. Healthcheck: http://%s:%s%s",
+            settings.host,
+            settings.port,
+            settings.healthcheck_path,
+        )
         await dispatcher.start_polling(bot)
     except Exception:
         logger.critical("Polling runtime failed", exc_info=True)

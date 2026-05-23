@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 import logging
+from collections.abc import Mapping
 
 import aiosqlite
 
@@ -85,7 +85,10 @@ class VideoRepository:
             )
             await self.connection.commit()
         except Exception:
-            logger.exception("Could not upsert cached video normalized_url=%s", video.normalized_url)
+            logger.exception(
+                "Could not upsert cached video normalized_url=%s",
+                video.normalized_url,
+            )
             raise
 
 

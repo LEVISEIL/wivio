@@ -39,7 +39,10 @@ class TelegramUploader:
                 height=video.height,
             )
             if message.video is None:
-                logger.error("Telegram upload returned no video object normalized_url=%s", video.normalized_url)
+                logger.error(
+                    "Telegram upload returned no video object normalized_url=%s",
+                    video.normalized_url,
+                )
                 raise UploadError("Telegram did not return a video object")
             return message.video.file_id, message.video.file_unique_id
 

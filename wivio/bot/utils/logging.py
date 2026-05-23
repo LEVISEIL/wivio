@@ -20,9 +20,7 @@ class FutureTelegramAlertHandler(logging.Handler):
 def setup_logging(logs_dir: Path, level: str) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
 
     console = logging.StreamHandler()
     console.setFormatter(formatter)

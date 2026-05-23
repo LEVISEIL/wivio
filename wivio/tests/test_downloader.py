@@ -4,7 +4,7 @@ import pytest
 
 from bot.services.downloader import VideoDownloader, build_caption, html_escape
 from bot.services.errors import FileTooLargeError
-from bot.utils.urls import Platform, ParsedVideoUrl
+from bot.utils.urls import ParsedVideoUrl, Platform
 
 
 def parsed_url() -> ParsedVideoUrl:

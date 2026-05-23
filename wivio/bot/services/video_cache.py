@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
+import builtins
 import logging
+from collections import defaultdict
 
 from bot.database.models import CachedVideo
 from bot.database.repositories import EventRepository, VideoRepository
@@ -38,7 +39,11 @@ class VideoCacheService:
     ) -> tuple[CachedVideo, bool]:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is not None:
-            logger.info("Cache hit normalized_url=%s user_id=%s", parsed_url.normalized_url, user_id)
+            logger.info(
+                "Cache hit normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
             await self.events.add(
                 parsed_url.normalized_url,
                 user_id,
@@ -69,7 +74,7 @@ class VideoCacheService:
                     self._download_upload_and_store(parsed_url),
                     timeout=self.timeout_seconds,
                 )
-            except asyncio.TimeoutError as exc:
+            except builtins.TimeoutError as exc:
                 logger.warning(
                     "Video processing timed out normalized_url=%s user_id=%s timeout_seconds=%s",
                     parsed_url.normalized_url,
@@ -114,7 +119,11 @@ class VideoCacheService:
     ) -> tuple[CachedVideo | None, str]:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is not None:
-            logger.info("Cache hit normalized_url=%s user_id=%s", parsed_url.normalized_url, user_id)
+            logger.info(
+                "Cache hit normalized_url=%s user_id=%s",
+                parsed_url.normalized_url,
+                user_id,
+            )
             await self.events.add(
                 parsed_url.normalized_url,
                 user_id,
@@ -216,7 +225,7 @@ class VideoCacheService:
                 self._download_upload_and_store(parsed_url),
                 timeout=self.timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
+        except builtins.TimeoutError as exc:
             await self.events.add(
                 parsed_url.normalized_url,
                 user_id,
@@ -241,9 +250,16 @@ class VideoCacheService:
                 parsed_url.platform.value,
                 "created",
             )
-            logger.info("Background processing completed normalized_url=%s", parsed_url.normalized_url)
+            logger.info(
+                "Background processing completed normalized_url=%s",
+                parsed_url.normalized_url,
+            )
 
     def _forget_inflight(self, normalized_url: str, task: asyncio.Task[None]) -> None:
         if self._inflight.get(normalized_url) is task:
             self._inflight.pop(normalized_url, None)
-            logger.debug("Forgot in-flight task normalized_url=%s done=%s", normalized_url, task.done())
+            logger.debug(
+                "Forgot in-flight task normalized_url=%s done=%s",
+                normalized_url,
+                task.done(),
+            )

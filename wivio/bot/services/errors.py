@@ -6,7 +6,9 @@ class VideoBotError(Exception):
 
 
 class DownloadError(VideoBotError):
-    user_message = "Could not download this video. It may be private, unavailable, or region restricted."
+    user_message = (
+        "Could not download this video. It may be private, unavailable, or region restricted."
+    )
 
 
 class FileTooLargeError(VideoBotError):

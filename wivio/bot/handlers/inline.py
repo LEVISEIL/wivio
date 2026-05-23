@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from hashlib import sha1
 import logging
+from hashlib import sha1
 from typing import Any
 
 from aiogram import Router
@@ -137,7 +137,10 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             inline_query,
             results=[
                 cached_video_result(
-                    result_id=_result_id(cached.normalized_url, cached.telegram_file_unique_id or "video"),
+                    result_id=_result_id(
+                        cached.normalized_url,
+                        cached.telegram_file_unique_id or "video",
+                    ),
                     file_id=cached.telegram_file_id,
                     title=cached.title,
                     caption=cached.caption,

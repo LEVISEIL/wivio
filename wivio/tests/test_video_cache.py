@@ -6,7 +6,7 @@ import pytest
 from bot.database.models import CachedVideo
 from bot.services.downloader import DownloadedVideo
 from bot.services.video_cache import VideoCacheService
-from bot.utils.urls import Platform, ParsedVideoUrl
+from bot.utils.urls import ParsedVideoUrl, Platform
 
 
 class FakeVideoRepository:

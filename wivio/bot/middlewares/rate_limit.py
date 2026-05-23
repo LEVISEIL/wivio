@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-import logging
 from time import monotonic
 from typing import Any
 

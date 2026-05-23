@@ -163,6 +163,12 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+Run the full local check before committing:
+
+```bash
+make check
+```
+
 ## Docker Run
 
 ```bash
