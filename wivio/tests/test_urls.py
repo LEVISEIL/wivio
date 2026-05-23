@@ -30,6 +30,13 @@ def test_parse_instagram_reel() -> None:
     assert parsed.platform == Platform.INSTAGRAM
 
 
+def test_parse_instagram_video_post() -> None:
+    parsed = parse_video_url("https://www.instagram.com/p/DYFdU42jGmS/?igsh=abc")
+
+    assert parsed.normalized_url == "https://instagram.com/p/DYFdU42jGmS"
+    assert parsed.platform == Platform.INSTAGRAM
+
+
 def test_parse_youtube_shorts() -> None:
     parsed = parse_video_url("https://m.youtube.com/shorts/aRa1aCDEj4M?si=share")
 
@@ -37,9 +44,9 @@ def test_parse_youtube_shorts() -> None:
     assert parsed.platform == Platform.YOUTUBE_SHORTS
 
 
-def test_rejects_instagram_non_reel() -> None:
-    with pytest.raises(UnsupportedUrlError, match="Only Instagram Reels"):
-        parse_video_url("https://instagram.com/p/example")
+def test_rejects_instagram_unsupported_page() -> None:
+    with pytest.raises(UnsupportedUrlError, match="Only Instagram Reels and video posts"):
+        parse_video_url("https://instagram.com/stories/example")
 
 
 def test_rejects_youtube_non_shorts_page() -> None:

@@ -59,6 +59,7 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
     dispatcher = Dispatcher()
     dispatcher["video_cache"] = video_cache
     dispatcher["inline_cache_time"] = settings.inline_cache_time
+    dispatcher["inline_ready_wait_seconds"] = settings.inline_ready_wait_seconds
     dispatcher.include_router(inline_router)
     dispatcher.inline_query.middleware(
         InlineRateLimitMiddleware(

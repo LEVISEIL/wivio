@@ -41,6 +41,7 @@ class Settings:
 
     max_video_size_mb: int
     inline_download_timeout: int
+    inline_ready_wait_seconds: int
     download_retries: int
     upload_retries: int
 
@@ -102,6 +103,7 @@ def load_settings() -> Settings:
         logs_dir=Path(os.getenv("LOGS_DIR", "./logs")),
         max_video_size_mb=_int("MAX_VIDEO_SIZE_MB", 49),
         inline_download_timeout=_int("INLINE_DOWNLOAD_TIMEOUT", 45),
+        inline_ready_wait_seconds=_int("INLINE_READY_WAIT_SECONDS", 12),
         download_retries=_int("DOWNLOAD_RETRIES", 2),
         upload_retries=_int("UPLOAD_RETRIES", 2),
         rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 6),
