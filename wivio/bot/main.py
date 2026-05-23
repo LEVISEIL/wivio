@@ -5,7 +5,7 @@ import logging
 
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
-
+#тест
 from bot.app import build_app
 from bot.config import load_settings
 from bot.healthcheck import healthcheck

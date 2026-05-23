@@ -1,0 +1,37 @@
+.git
+.gitignore
+.dockerignore
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python/local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# IDE/editor files
+.idea/
+.vscode/
+.DS_Store
+
+# Runtime state mounted by docker-compose
+data/
+downloads/
+logs/
+
+# Local docs/cache noise
+*.log
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.db-shm
+*.db-wal
