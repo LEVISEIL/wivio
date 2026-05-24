@@ -5,6 +5,9 @@ from bot.handlers.start import (
     start_keyboard,
     start_message,
     stats_message,
+    video_file_id_message,
+    welcome_file_id_message,
+    welcome_forward_message_config,
 )
 
 
@@ -58,3 +61,30 @@ def test_stats_message_contains_user_stats() -> None:
     assert "Статистика Wivio" in message
     assert "Всего пользователей: <b>10</b>" in message
     assert "Ошибок загрузки за 24 часа: <b>1</b>" in message
+
+
+def test_video_file_id_message_contains_env_name() -> None:
+    message = video_file_id_message("telegram-file-id")
+
+    assert "WELCOME_VIDEO_FILE_ID" in message
+    assert "<code>telegram-file-id</code>" in message
+
+
+def test_welcome_file_id_message_can_use_animation_env_name() -> None:
+    message = welcome_file_id_message("animation-file-id", "WELCOME_ANIMATION_FILE_ID")
+
+    assert "WELCOME_ANIMATION_FILE_ID" in message
+    assert "<code>animation-file-id</code>" in message
+
+
+def test_welcome_forward_message_config_contains_env_values() -> None:
+    message = welcome_forward_message_config(-100123, 456)
+
+    assert "<code>WELCOME_FORWARD_CHAT_ID=-100123</code>" in message
+    assert "<code>WELCOME_FORWARD_MESSAGE_ID=456</code>" in message
+
+
+def test_video_file_id_message_explains_missing_video() -> None:
+    assert video_file_id_message(None) == (
+        "Отправьте видео или animation боту и ответьте на него командой /fileid."
+    )

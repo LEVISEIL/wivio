@@ -27,6 +27,13 @@ def _optional_int(name: str) -> int | None:
     return int(raw)
 
 
+def _optional_path(name: str) -> Path | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return Path(raw.strip()).expanduser()
+
+
 def _int_set(name: str) -> frozenset[int]:
     raw = os.getenv(name, "")
     values: set[int] = set()
@@ -42,6 +49,12 @@ class Settings:
     bot_token: str
     bot_username: str
     upload_chat_id: int
+    welcome_forward_chat_id: int | None
+    welcome_forward_message_id: int | None
+    welcome_animation_url: str
+    welcome_animation_path: Path | None
+    welcome_animation_file_id: str
+    welcome_video_file_id: str
 
     bot_mode: str
     webhook_url: str
@@ -117,6 +130,12 @@ def load_settings() -> Settings:
         bot_token=token,
         bot_username=username,
         upload_chat_id=int(upload_chat_id),
+        welcome_forward_chat_id=_optional_int("WELCOME_FORWARD_CHAT_ID"),
+        welcome_forward_message_id=_optional_int("WELCOME_FORWARD_MESSAGE_ID"),
+        welcome_animation_url=os.getenv("WELCOME_ANIMATION_URL", "").strip(),
+        welcome_animation_path=_optional_path("WELCOME_ANIMATION_PATH"),
+        welcome_animation_file_id=os.getenv("WELCOME_ANIMATION_FILE_ID", "").strip(),
+        welcome_video_file_id=os.getenv("WELCOME_VIDEO_FILE_ID", "").strip(),
         bot_mode=os.getenv("BOT_MODE", "polling").strip().lower(),
         webhook_url=os.getenv("WEBHOOK_URL", "").strip(),
         webhook_secret=os.getenv("WEBHOOK_SECRET", "").strip(),

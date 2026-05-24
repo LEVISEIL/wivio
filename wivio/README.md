@@ -126,6 +126,12 @@ INLINE_DOWNLOAD_TIMEOUT=45
 INLINE_READY_WAIT_SECONDS=12
 MAX_CACHED_VIDEOS=5000
 CACHE_TRIM_TO_VIDEOS=4500
+WELCOME_FORWARD_CHAT_ID=
+WELCOME_FORWARD_MESSAGE_ID=
+WELCOME_ANIMATION_URL=
+WELCOME_ANIMATION_PATH=
+WELCOME_ANIMATION_FILE_ID=
+WELCOME_VIDEO_FILE_ID=
 ADMIN_USER_IDS=986436438
 ```
 
@@ -148,6 +154,13 @@ Admin commands:
 
 - `/myid` shows your Telegram user id.
 - `/stats` shows user and cache statistics for ids listed in `ADMIN_USER_IDS`.
+- `/fileid` replies with Telegram media and message ids for admins. To show the welcome message
+  as a forwarded/quoted-style message, prepare it in a private assets chat with the bot, reply to
+  that message with `/fileid`, then put `WELCOME_FORWARD_CHAT_ID` and
+  `WELCOME_FORWARD_MESSAGE_ID` into `.env`. To make the welcome media autoplay without forwarding,
+  put a direct HTTPS GIF/MP4 link into `WELCOME_ANIMATION_URL`, a local silent MP4/GIF path into
+  `WELCOME_ANIMATION_PATH`, or send a silent MP4/GIF animation to the bot and put the returned
+  value into `WELCOME_ANIMATION_FILE_ID`. For a regular video fallback, use `WELCOME_VIDEO_FILE_ID`.
 
 For webhook mode:
 

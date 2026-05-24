@@ -19,6 +19,12 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.bot_token == "123:token"
     assert settings.bot_username == "wivio_bot"
     assert settings.upload_chat_id == -100123
+    assert settings.welcome_forward_chat_id is None
+    assert settings.welcome_forward_message_id is None
+    assert settings.welcome_animation_url == ""
+    assert settings.welcome_animation_path is None
+    assert settings.welcome_animation_file_id == ""
+    assert settings.welcome_video_file_id == ""
     assert settings.database_path == Path("/tmp/test.sqlite3")
     assert settings.bot_mode == "polling"
     assert settings.max_video_size_bytes == 49 * 1024 * 1024
@@ -50,6 +56,12 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         bot_token="token",
         bot_username="bot",
         upload_chat_id=1,
+        welcome_forward_chat_id=None,
+        welcome_forward_message_id=None,
+        welcome_animation_url="",
+        welcome_animation_path=None,
+        welcome_animation_file_id="",
+        welcome_video_file_id="",
         bot_mode="webhook",
         webhook_url="https://example.com",
         webhook_secret="secret",
