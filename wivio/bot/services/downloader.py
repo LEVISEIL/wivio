@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -170,8 +171,10 @@ class VideoDownloader:
             "restrictfilenames": True,
             "logger": _YtDlpLogger(),
         }
+        temporary_cookies_path = None
         if cookies_path is not None:
-            options["cookiefile"] = str(cookies_path)
+            temporary_cookies_path = _copy_cookiefile(cookies_path, job_dir)
+            options["cookiefile"] = str(temporary_cookies_path)
 
         try:
             with YoutubeDL(options) as ydl:
@@ -190,7 +193,9 @@ class VideoDownloader:
 
         candidates = [path for path in downloaded if path.exists()]
         candidates.extend(
-            path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() != ".jpg"
+            path
+            for path in job_dir.iterdir()
+            if path.is_file() and path.suffix.lower() != ".jpg" and path != temporary_cookies_path
         )
         if not candidates:
             logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
@@ -257,6 +262,12 @@ def _clean_string(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _copy_cookiefile(cookies_path: Path, job_dir: Path) -> Path:
+    temporary_cookies_path = job_dir / "cookies.txt"
+    shutil.copyfile(cookies_path, temporary_cookies_path)
+    return temporary_cookies_path
 
 
 def _optional_int(value: object) -> int | None:
