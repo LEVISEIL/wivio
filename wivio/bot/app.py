@@ -10,6 +10,7 @@ from bot.config import Settings
 from bot.database.connection import Database
 from bot.database.repositories import EventRepository, VideoRepository
 from bot.handlers.inline import router as inline_router
+from bot.handlers.start import router as start_router
 from bot.middlewares.rate_limit import InlineRateLimitMiddleware
 from bot.services.cleanup import CleanupScheduler
 from bot.services.downloader import VideoDownloader
@@ -60,6 +61,8 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
     dispatcher["video_cache"] = video_cache
     dispatcher["inline_cache_time"] = settings.inline_cache_time
     dispatcher["inline_ready_wait_seconds"] = settings.inline_ready_wait_seconds
+    dispatcher["bot_username"] = settings.bot_username
+    dispatcher.include_router(start_router)
     dispatcher.include_router(inline_router)
     dispatcher.inline_query.middleware(
         InlineRateLimitMiddleware(
