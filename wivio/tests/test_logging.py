@@ -1,6 +1,6 @@
 import logging
 
-from bot.utils.logging import TelegramAlertHandler, setup_logging
+from bot.utils.logging import TelegramAlertHandler, _is_polling_conflict, setup_logging
 
 
 def test_setup_logging_skips_telegram_alert_handler_when_disabled(tmp_path) -> None:
@@ -89,4 +89,51 @@ def test_telegram_alert_handler_stores_ssl_verify_setting() -> None:
 
     assert handler.ssl_verify is False
     assert handler.message_thread_id == 777
+    handler.close()
+
+
+def test_telegram_alert_handler_formats_polling_conflict_alert() -> None:
+    handler = TelegramAlertHandler(
+        bot_token="token",
+        chat_id="-100123",
+    )
+    record = logging.LogRecord(
+        name="aiogram.dispatcher",
+        level=logging.ERROR,
+        pathname="/app/.venv/site-packages/aiogram/dispatcher.py",
+        lineno=1,
+        msg=(
+            "Failed to fetch updates - TelegramConflictError: Telegram server says - "
+            "Conflict: terminated by other getUpdates request"
+        ),
+        args=(),
+        exc_info=None,
+    )
+
+    message = handler._format_message(record)
+    handler.close()
+
+    assert _is_polling_conflict(record) is True
+    assert "Bot is already running somewhere else" in message
+    assert "terminated by other getUpdates request" in message
+
+
+def test_telegram_alert_handler_suppresses_duplicate_records() -> None:
+    handler = TelegramAlertHandler(
+        bot_token="token",
+        chat_id="-100123",
+        duplicate_suppress_seconds=300,
+    )
+    record = logging.LogRecord(
+        name="bot.test",
+        level=logging.ERROR,
+        pathname="/app/bot/test.py",
+        lineno=12,
+        msg="same error",
+        args=(),
+        exc_info=None,
+    )
+
+    assert handler._is_duplicate(record) is False
+    assert handler._is_duplicate(record) is True
     handler.close()

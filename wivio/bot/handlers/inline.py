@@ -12,7 +12,12 @@ from aiogram.types import InlineQuery, InlineQueryResultsButton
 from bot.database.models import CachedVideo
 from bot.database.repositories import UserRepository
 from bot.services.errors import VideoBotError
-from bot.services.video_cache import FAILED_STATUS, TIMEOUT_STATUS, VideoCacheService
+from bot.services.video_cache import (
+    FAILED_STATUS,
+    RESTRICTED_STATUS,
+    TIMEOUT_STATUS,
+    VideoCacheService,
+)
 from bot.utils.inline_results import article_result, cached_video_result
 from bot.utils.urls import ParsedVideoUrl, UnsupportedUrlError, parse_video_url
 
@@ -116,7 +121,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                 parsed.normalized_url,
                 status,
             )
-            if status in {FAILED_STATUS, TIMEOUT_STATUS}:
+            if status in {FAILED_STATUS, TIMEOUT_STATUS, RESTRICTED_STATUS}:
                 await users.increment_failure(inline_query.from_user.id)
                 await _answer_inline(
                     inline_query,
@@ -141,6 +146,24 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                     cached.normalized_url,
                 )
             else:
+                status = video_cache.get_recent_failure_status(parsed.normalized_url) or status
+                if status in {FAILED_STATUS, TIMEOUT_STATUS, RESTRICTED_STATUS}:
+                    logger.info(
+                        "Inline video failed during wait user_id=%s normalized_url=%s status=%s",
+                        inline_query.from_user.id,
+                        parsed.normalized_url,
+                        status,
+                    )
+                    await users.increment_failure(inline_query.from_user.id)
+                    await _answer_inline(
+                        inline_query,
+                        results=[],
+                        cache_time=0,
+                        is_personal=True,
+                        button=_failed_button(status),
+                    )
+                    return
+
                 await _answer_inline(
                     inline_query,
                     results=[],
@@ -213,6 +236,8 @@ def _loading_button() -> InlineQueryResultsButton:
 def _failed_button(status: str) -> InlineQueryResultsButton:
     if status == TIMEOUT_STATUS:
         text = "Видео обрабатывалось слишком долго. Попробуйте ещё раз"
+    elif status == RESTRICTED_STATUS:
+        text = "Instagram ограничил доступ к этому видео"
     else:
         text = "Не удалось скачать. Возможно, нужен вход в Instagram"
     return InlineQueryResultsButton(

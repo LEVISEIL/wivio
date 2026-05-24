@@ -2,7 +2,7 @@ import pytest
 
 from bot.database.models import CachedVideo
 from bot.handlers.inline import _failed_button, _loading_button, _wait_for_inline_ready
-from bot.services.video_cache import FAILED_STATUS, TIMEOUT_STATUS
+from bot.services.video_cache import FAILED_STATUS, RESTRICTED_STATUS, TIMEOUT_STATUS
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 
@@ -40,6 +40,13 @@ def test_failed_button_explains_timeout() -> None:
 
     assert button.text == "Видео обрабатывалось слишком долго. Попробуйте ещё раз"
     assert button.start_parameter == TIMEOUT_STATUS
+
+
+def test_failed_button_explains_restricted_instagram_video() -> None:
+    button = _failed_button(RESTRICTED_STATUS)
+
+    assert button.text == "Instagram ограничил доступ к этому видео"
+    assert button.start_parameter == RESTRICTED_STATUS
 
 
 @pytest.mark.asyncio

@@ -11,10 +11,21 @@ import aiohttp
 from yt_dlp import DownloadError as YtDlpDownloadError
 from yt_dlp import YoutubeDL
 
-from bot.services.errors import DownloadError, FileTooLargeError
+from bot.services.errors import DownloadError, FileTooLargeError, RestrictedVideoError
 from bot.utils.urls import ParsedVideoUrl
 
 logger = logging.getLogger(__name__)
+
+
+class _YtDlpLogger:
+    def debug(self, message: str) -> None:
+        logger.debug("yt-dlp: %s", message)
+
+    def warning(self, message: str) -> None:
+        logger.warning("yt-dlp warning: %s", message)
+
+    def error(self, message: str) -> None:
+        logger.debug("yt-dlp error output: %s", message)
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,13 @@ class VideoDownloader:
                 job_dir,
             )
         except YtDlpDownloadError as exc:
+            if _is_restricted_instagram_error(str(exc)):
+                logger.warning(
+                    "Instagram restricted video normalized_url=%s error=%s",
+                    parsed_url.normalized_url,
+                    exc,
+                )
+                raise RestrictedVideoError(str(exc)) from exc
             logger.warning(
                 "yt-dlp failed normalized_url=%s error=%s",
                 parsed_url.normalized_url,
@@ -131,12 +149,21 @@ class VideoDownloader:
             "max_filesize": self.max_video_size_bytes,
             "progress_hooks": [hook],
             "restrictfilenames": True,
+            "logger": _YtDlpLogger(),
         }
 
         try:
             with YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=True)
-        except Exception:
+        except Exception as exc:
+            if _is_restricted_instagram_error(str(exc)):
+                logger.warning(
+                    "yt-dlp found restricted Instagram video url=%s job_dir=%s error=%s",
+                    url,
+                    job_dir,
+                    exc,
+                )
+                raise
             logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
             raise
 
@@ -208,3 +235,16 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_restricted_instagram_error(error: str) -> bool:
+    text = error.lower()
+    markers = (
+        "this content isn't available to everyone",
+        "it can't be seen by certain audiences",
+        "instagram sent an empty media response",
+        "check if this post is accessible in your browser without being logged-in",
+        "login required",
+        "private",
+    )
+    return "[instagram]" in text and any(marker in text for marker in markers)

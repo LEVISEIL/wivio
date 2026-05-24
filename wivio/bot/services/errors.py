@@ -11,6 +11,10 @@ class DownloadError(VideoBotError):
     )
 
 
+class RestrictedVideoError(DownloadError):
+    user_message = "Instagram ограничил доступ к этому видео."
+
+
 class FileTooLargeError(VideoBotError):
     user_message = "This video is too large for inline upload."
 
