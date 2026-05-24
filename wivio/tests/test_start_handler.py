@@ -30,6 +30,12 @@ def test_chat_id_message_contains_chat_id() -> None:
     assert chat_id_message(-100123) == "Chat ID для алертов: <code>-100123</code>"
 
 
+def test_chat_id_message_contains_topic_thread_id() -> None:
+    assert chat_id_message(-100123, 777) == (
+        "Chat ID для алертов: <code>-100123</code>\nThread ID для этой темы: <code>777</code>"
+    )
+
+
 def test_my_id_message_contains_user_id() -> None:
     assert my_id_message(42) == "Ваш Telegram user id: <code>42</code>"
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -14,6 +16,7 @@ class TelegramAlertHandler(logging.Handler):
         self,
         bot_token: str,
         chat_id: str,
+        message_thread_id: int | None = None,
         timeout_seconds: int = 5,
         ssl_verify: bool = True,
         level: int | str = logging.ERROR,
@@ -21,6 +24,7 @@ class TelegramAlertHandler(logging.Handler):
         super().__init__(level)
         self.bot_token = bot_token
         self.chat_id = chat_id
+        self.message_thread_id = message_thread_id
         self.timeout_seconds = timeout_seconds
         self.ssl_verify = ssl_verify
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram-alert")
@@ -37,7 +41,7 @@ class TelegramAlertHandler(logging.Handler):
         super().close()
 
     def _format_message(self, record: logging.LogRecord) -> str:
-        message = self.format(record)
+        message = _format_telegram_alert(record)
         if len(message) <= 3900:
             return message
         return f"{message[:3900]}\n...[truncated]"
@@ -52,14 +56,19 @@ class TelegramAlertHandler(logging.Handler):
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         connector = aiohttp.TCPConnector(ssl=self.ssl_verify)
+        data = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "true",
+        }
+        if self.message_thread_id is not None:
+            data["message_thread_id"] = str(self.message_thread_id)
+
         async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.post(
                 url,
-                data={
-                    "chat_id": self.chat_id,
-                    "text": text,
-                    "disable_web_page_preview": "true",
-                },
+                data=data,
             ) as response:
                 await response.read()
 
@@ -70,6 +79,7 @@ def setup_logging(
     telegram_alerts_enabled: bool = False,
     telegram_alert_bot_token: str = "",
     telegram_alert_chat_id: str = "",
+    telegram_alert_message_thread_id: int | None = None,
     telegram_alert_level: str = "ERROR",
     telegram_alert_ssl_verify: bool = True,
 ) -> None:
@@ -101,6 +111,7 @@ def setup_logging(
             alert_handler = TelegramAlertHandler(
                 bot_token=telegram_alert_bot_token,
                 chat_id=telegram_alert_chat_id,
+                message_thread_id=telegram_alert_message_thread_id,
                 ssl_verify=telegram_alert_ssl_verify,
                 level=_parse_level(telegram_alert_level, logging.ERROR),
             )
@@ -120,3 +131,39 @@ def _parse_level(value: str, default: int) -> int:
     if isinstance(level, int):
         return level
     return default
+
+
+def _format_telegram_alert(record: logging.LogRecord) -> str:
+    timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"{_level_icon(record.levelno)} <b>Wivio Alert</b>",
+        "",
+        f"<b>Level:</b> <code>{_html_escape(record.levelname)}</code>",
+        f"<b>Logger:</b> <code>{_html_escape(record.name)}</code>",
+        f"<b>Time:</b> <code>{timestamp}</code>",
+        f"<b>Location:</b> <code>{_html_escape(record.pathname)}:{record.lineno}</code>",
+        "",
+        "<b>Message:</b>",
+        f"<code>{_html_escape(record.getMessage())}</code>",
+    ]
+    if record.exc_info:
+        stacktrace = "".join(traceback.format_exception(*record.exc_info)).strip()
+        lines.extend(["", "<b>Traceback:</b>", f"<pre>{_html_escape(stacktrace)}</pre>"])
+    return "\n".join(lines)
+
+
+def _level_icon(level: int) -> str:
+    if level >= logging.CRITICAL:
+        return "CRITICAL"
+    if level >= logging.ERROR:
+        return "ERROR"
+    if level >= logging.WARNING:
+        return "WARNING"
+    return "INFO"
+
+
+def _html_escape(value: object) -> str:
+    text = str(value)
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )

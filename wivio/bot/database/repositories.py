@@ -92,6 +92,51 @@ class VideoRepository:
             )
             raise
 
+    async def trim_to_limit(self, max_videos: int, trim_to_videos: int) -> int:
+        if max_videos <= 0:
+            return 0
+
+        trim_to = max(0, min(trim_to_videos, max_videos))
+        try:
+            cursor = await self.connection.execute("SELECT COUNT(*) AS total FROM videos")
+            row = await cursor.fetchone()
+            await cursor.close()
+            total = _int_value(row["total"])
+            if total <= max_videos:
+                return 0
+
+            delete_count = total - trim_to
+            delete_cursor = await self.connection.execute(
+                """
+                DELETE FROM videos
+                WHERE id IN (
+                    SELECT id
+                    FROM videos
+                    ORDER BY last_used_at ASC, created_at ASC, id ASC
+                    LIMIT ?
+                )
+                """,
+                (delete_count,),
+            )
+            await self.connection.commit()
+            deleted = delete_cursor.rowcount
+            await delete_cursor.close()
+            logger.info(
+                "Trimmed video cache total=%s max=%s trim_to=%s deleted=%s",
+                total,
+                max_videos,
+                trim_to,
+                deleted,
+            )
+            return deleted if deleted >= 0 else delete_count
+        except Exception:
+            logger.exception(
+                "Could not trim video cache max_videos=%s trim_to_videos=%s",
+                max_videos,
+                trim_to_videos,
+            )
+            raise
+
 
 class EventRepository:
     def __init__(self, connection: aiosqlite.Connection) -> None:

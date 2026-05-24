@@ -36,12 +36,16 @@ class VideoCacheService:
         downloader: VideoDownloader,
         uploader: TelegramUploader,
         timeout_seconds: int,
+        max_cached_videos: int = 0,
+        cache_trim_to_videos: int = 0,
     ) -> None:
         self.videos = videos
         self.events = events
         self.downloader = downloader
         self.uploader = uploader
         self.timeout_seconds = timeout_seconds
+        self.max_cached_videos = max_cached_videos
+        self.cache_trim_to_videos = cache_trim_to_videos
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._inflight: dict[str, asyncio.Task[None]] = {}
         self._failures: dict[str, ProcessingFailure] = {}
@@ -296,6 +300,7 @@ class VideoCacheService:
             height=downloaded.height,
         )
         await self.videos.upsert(cached)
+        await self._trim_video_cache()
         self._failures.pop(parsed_url.normalized_url, None)
         logger.info("Cached %s", parsed_url.normalized_url)
         return cached
@@ -348,6 +353,25 @@ class VideoCacheService:
             logger.info(
                 "Background processing completed normalized_url=%s",
                 parsed_url.normalized_url,
+            )
+
+    async def _trim_video_cache(self) -> None:
+        if self.max_cached_videos <= 0:
+            return
+
+        trim_to = self.cache_trim_to_videos
+        if trim_to < 0:
+            trim_to = 0
+        if trim_to >= self.max_cached_videos:
+            trim_to = max(0, self.max_cached_videos - 1)
+
+        deleted = await self.videos.trim_to_limit(self.max_cached_videos, trim_to)
+        if deleted:
+            logger.info(
+                "Video cache trim completed max_cached_videos=%s trim_to=%s deleted=%s",
+                self.max_cached_videos,
+                trim_to,
+                deleted,
             )
 
     def _remember_failure(self, normalized_url: str, status: str, error: str) -> None:

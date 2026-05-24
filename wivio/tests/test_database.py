@@ -14,10 +14,14 @@ class FakeTelegramUser:
     last_name = "User"
 
 
-def video(title: str = "Title", file_id: str = "file-id") -> CachedVideo:
+def video(
+    title: str = "Title",
+    file_id: str = "file-id",
+    normalized_url: str = "https://youtube.com/shorts/aRa1aCDEj4M",
+) -> CachedVideo:
     return CachedVideo(
-        normalized_url="https://youtube.com/shorts/aRa1aCDEj4M",
-        original_url="https://youtube.com/shorts/aRa1aCDEj4M?si=share",
+        normalized_url=normalized_url,
+        original_url=f"{normalized_url}?si=share",
         platform="youtube_shorts",
         title=title,
         caption="<b>Title</b>",
@@ -108,5 +112,44 @@ async def test_user_repository_tracks_users_and_stats(tmp_path: Path) -> None:
         assert stats.failed_requests == 1
         assert stats.cached_videos == 1
         assert stats.errors_24h == 1
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_video_repository_trims_oldest_items_to_low_water_mark(tmp_path: Path) -> None:
+    database = Database(tmp_path / "bot.sqlite3")
+    await database.connect()
+    try:
+        await database.migrate()
+        videos = VideoRepository(database.connection)
+        urls = [
+            "https://youtube.com/shorts/oldest",
+            "https://youtube.com/shorts/middle",
+            "https://youtube.com/shorts/newest",
+        ]
+        for item in urls:
+            await videos.upsert(video(normalized_url=item))
+
+        await database.connection.execute(
+            "UPDATE videos SET last_used_at = datetime('now', '-3 days') WHERE normalized_url = ?",
+            (urls[0],),
+        )
+        await database.connection.execute(
+            "UPDATE videos SET last_used_at = datetime('now', '-2 days') WHERE normalized_url = ?",
+            (urls[1],),
+        )
+        await database.connection.execute(
+            "UPDATE videos SET last_used_at = datetime('now', '-1 day') WHERE normalized_url = ?",
+            (urls[2],),
+        )
+        await database.connection.commit()
+
+        deleted = await videos.trim_to_limit(max_videos=2, trim_to_videos=1)
+
+        assert deleted == 2
+        assert await videos.get(urls[0]) is None
+        assert await videos.get(urls[1]) is None
+        assert await videos.get(urls[2]) == video(normalized_url=urls[2])
     finally:
         await database.close()

@@ -12,12 +12,17 @@ from bot.utils.urls import ParsedVideoUrl, Platform
 class FakeVideoRepository:
     def __init__(self) -> None:
         self.items: dict[str, CachedVideo] = {}
+        self.trim_calls: list[tuple[int, int]] = []
 
     async def get(self, normalized_url: str) -> CachedVideo | None:
         return self.items.get(normalized_url)
 
     async def upsert(self, video: CachedVideo) -> None:
         self.items[video.normalized_url] = video
+
+    async def trim_to_limit(self, max_videos: int, trim_to_videos: int) -> int:
+        self.trim_calls.append((max_videos, trim_to_videos))
+        return 0
 
 
 class FakeEventRepository:
@@ -177,6 +182,33 @@ async def test_wait_for_cached_returns_video_after_inflight_task_finishes(tmp_pa
 
     assert cached is not None
     assert cached.telegram_file_id == "telegram-file-id"
+
+
+@pytest.mark.asyncio
+async def test_background_success_trims_cache_when_limit_is_enabled(tmp_path: Path) -> None:
+    videos = FakeVideoRepository()
+    events = FakeEventRepository()
+    downloader = FakeDownloader(downloaded_video(tmp_path))
+    uploader = FakeUploader()
+    service = VideoCacheService(
+        videos,
+        events,
+        downloader,
+        uploader,
+        timeout_seconds=5,
+        max_cached_videos=3,
+        cache_trim_to_videos=2,
+    )
+
+    result, status = await service.get_or_enqueue(parsed_url(), user_id=42)
+    assert result is None
+    assert status == "queued"
+
+    await asyncio.wait_for(downloader.started.wait(), timeout=1)
+    downloader.release.set()
+    await asyncio.wait_for(next(iter(service._inflight.values())), timeout=1)
+
+    assert videos.trim_calls == [(3, 2)]
 
 
 @pytest.mark.asyncio
