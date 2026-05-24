@@ -12,7 +12,7 @@ from yt_dlp import DownloadError as YtDlpDownloadError
 from yt_dlp import YoutubeDL
 
 from bot.services.errors import DownloadError, FileTooLargeError, RestrictedVideoError
-from bot.utils.urls import ParsedVideoUrl
+from bot.utils.urls import ParsedVideoUrl, Platform
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +50,12 @@ class VideoDownloader:
         downloads_dir: Path,
         max_video_size_bytes: int,
         retries: int,
+        instagram_cookies_path: Path | None = None,
     ) -> None:
         self.downloads_dir = downloads_dir
         self.max_video_size_bytes = max_video_size_bytes
         self.retries = retries
+        self.instagram_cookies_path = instagram_cookies_path
 
     async def download(self, parsed_url: ParsedVideoUrl) -> DownloadedVideo:
         job_dir = self.downloads_dir / uuid4().hex
@@ -69,21 +71,33 @@ class VideoDownloader:
                 self._download_sync,
                 parsed_url.original_url,
                 job_dir,
+                self._cookies_path_for(parsed_url),
             )
         except YtDlpDownloadError as exc:
-            if _is_restricted_instagram_error(str(exc)):
+            error = str(exc)
+            if _is_instagram_auth_required_error(error):
+                logger.error(
+                    "Instagram cookies/login need attention: update cookies or wait for "
+                    "rate-limit to cool down. normalized_url=%s cookies_path=%s error=%s",
+                    parsed_url.normalized_url,
+                    self.instagram_cookies_path or "",
+                    exc,
+                    extra={"alert_fingerprint": "instagram-auth-required"},
+                )
+                raise RestrictedVideoError(error) from exc
+            if _is_restricted_instagram_error(error):
                 logger.warning(
                     "Instagram restricted video normalized_url=%s error=%s",
                     parsed_url.normalized_url,
                     exc,
                 )
-                raise RestrictedVideoError(str(exc)) from exc
+                raise RestrictedVideoError(error) from exc
             logger.warning(
                 "yt-dlp failed normalized_url=%s error=%s",
                 parsed_url.normalized_url,
                 exc,
             )
-            raise DownloadError(str(exc)) from exc
+            raise DownloadError(error) from exc
         except Exception as exc:
             logger.exception(
                 "Unexpected download failure normalized_url=%s",
@@ -130,7 +144,12 @@ class VideoDownloader:
             file_size=size,
         )
 
-    def _download_sync(self, url: str, job_dir: Path) -> tuple[dict, Path]:
+    def _download_sync(
+        self,
+        url: str,
+        job_dir: Path,
+        cookies_path: Path | None = None,
+    ) -> tuple[dict, Path]:
         downloaded: list[Path] = []
 
         def hook(data: dict) -> None:
@@ -151,6 +170,8 @@ class VideoDownloader:
             "restrictfilenames": True,
             "logger": _YtDlpLogger(),
         }
+        if cookies_path is not None:
+            options["cookiefile"] = str(cookies_path)
 
         try:
             with YoutubeDL(options) as ydl:
@@ -177,6 +198,16 @@ class VideoDownloader:
 
         video_path = max(candidates, key=lambda path: path.stat().st_size)
         return info, video_path
+
+    def _cookies_path_for(self, parsed_url: ParsedVideoUrl) -> Path | None:
+        if parsed_url.platform != Platform.INSTAGRAM:
+            return None
+        if self.instagram_cookies_path is None:
+            return None
+        if not self.instagram_cookies_path.exists():
+            logger.warning("Instagram cookies file does not exist: %s", self.instagram_cookies_path)
+            return None
+        return self.instagram_cookies_path
 
     async def _download_thumbnail(self, url: str | None, job_dir: Path) -> Path | None:
         if not url:
@@ -245,6 +276,20 @@ def _is_restricted_instagram_error(error: str) -> bool:
         "instagram sent an empty media response",
         "check if this post is accessible in your browser without being logged-in",
         "login required",
+        "rate-limit reached",
+        "locked behind the login page",
+        "use --cookies-from-browser or --cookies",
         "private",
+    )
+    return "[instagram]" in text and any(marker in text for marker in markers)
+
+
+def _is_instagram_auth_required_error(error: str) -> bool:
+    text = error.lower()
+    markers = (
+        "login required",
+        "rate-limit reached",
+        "locked behind the login page",
+        "use --cookies-from-browser or --cookies",
     )
     return "[instagram]" in text and any(marker in text for marker in markers)

@@ -76,6 +76,22 @@ BOT_MODE=polling
 ADMIN_USER_IDS=986436438
 ```
 
+Optional Instagram cookies:
+
+```env
+INSTAGRAM_COOKIES_PATH=/app/secrets/instagram-cookies.txt
+```
+
+Put the cookies file on the server:
+
+```bash
+mkdir -p /opt/wivio/secrets
+scp instagram-cookies.txt root@SERVER_IP:/opt/wivio/secrets/instagram-cookies.txt
+chmod 600 /opt/wivio/secrets/instagram-cookies.txt
+```
+
+The file must use Netscape cookies.txt format. Do not commit it.
+
 For Telegram alerts:
 
 ```env

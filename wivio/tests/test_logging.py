@@ -1,6 +1,11 @@
 import logging
 
-from bot.utils.logging import TelegramAlertHandler, _is_polling_conflict, setup_logging
+from bot.utils.logging import (
+    TelegramAlertHandler,
+    _alert_fingerprint,
+    _is_polling_conflict,
+    setup_logging,
+)
 
 
 def test_setup_logging_skips_telegram_alert_handler_when_disabled(tmp_path) -> None:
@@ -137,3 +142,18 @@ def test_telegram_alert_handler_suppresses_duplicate_records() -> None:
     assert handler._is_duplicate(record) is False
     assert handler._is_duplicate(record) is True
     handler.close()
+
+
+def test_alert_fingerprint_can_use_custom_record_value() -> None:
+    record = logging.LogRecord(
+        name="bot.test",
+        level=logging.ERROR,
+        pathname="/app/bot/test.py",
+        lineno=12,
+        msg="same alert with url %s",
+        args=("https://example.com/one",),
+        exc_info=None,
+    )
+    record.alert_fingerprint = "instagram-auth-required"
+
+    assert _alert_fingerprint(record) == "instagram-auth-required"

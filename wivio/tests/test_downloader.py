@@ -5,6 +5,7 @@ from yt_dlp import DownloadError as YtDlpDownloadError
 
 from bot.services.downloader import (
     VideoDownloader,
+    _is_instagram_auth_required_error,
     _is_restricted_instagram_error,
     build_caption,
     html_escape,
@@ -18,6 +19,14 @@ def parsed_url() -> ParsedVideoUrl:
         original_url="https://youtube.com/shorts/aRa1aCDEj4M",
         normalized_url="https://youtube.com/shorts/aRa1aCDEj4M",
         platform=Platform.YOUTUBE_SHORTS,
+    )
+
+
+def instagram_url() -> ParsedVideoUrl:
+    return ParsedVideoUrl(
+        original_url="https://www.instagram.com/reel/abc/",
+        normalized_url="https://instagram.com/reel/abc",
+        platform=Platform.INSTAGRAM,
     )
 
 
@@ -42,7 +51,47 @@ def test_detects_restricted_instagram_errors() -> None:
     assert _is_restricted_instagram_error(
         "[Instagram] id: This content isn't available to everyone"
     )
+    assert _is_restricted_instagram_error(
+        "[Instagram] id: Requested content is not available, rate-limit reached or login required"
+    )
     assert not _is_restricted_instagram_error("[YouTube] id: private video")
+
+
+def test_detects_instagram_auth_required_errors() -> None:
+    assert _is_instagram_auth_required_error(
+        "[Instagram] id: Requested content is not available, rate-limit reached or login required"
+    )
+    assert _is_instagram_auth_required_error(
+        "[Instagram] id: Main webpage is locked behind the login page"
+    )
+    assert not _is_instagram_auth_required_error(
+        "[Instagram] id: This content isn't available to everyone"
+    )
+
+
+def test_instagram_cookies_are_only_used_for_instagram(tmp_path: Path) -> None:
+    cookies_path = tmp_path / "instagram-cookies.txt"
+    cookies_path.write_text("# Netscape HTTP Cookie File\n")
+    downloader = VideoDownloader(
+        tmp_path,
+        max_video_size_bytes=100,
+        retries=1,
+        instagram_cookies_path=cookies_path,
+    )
+
+    assert downloader._cookies_path_for(instagram_url()) == cookies_path
+    assert downloader._cookies_path_for(parsed_url()) is None
+
+
+def test_missing_instagram_cookies_file_is_ignored(tmp_path: Path) -> None:
+    downloader = VideoDownloader(
+        tmp_path,
+        max_video_size_bytes=100,
+        retries=1,
+        instagram_cookies_path=tmp_path / "missing-cookies.txt",
+    )
+
+    assert downloader._cookies_path_for(instagram_url()) is None
 
 
 @pytest.mark.asyncio
@@ -54,9 +103,14 @@ async def test_download_builds_downloaded_video_from_yt_dlp_info(tmp_path: Path)
 
     downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
 
-    def fake_download_sync(url: str, job_dir: Path) -> tuple[dict, Path]:
+    def fake_download_sync(
+        url: str,
+        job_dir: Path,
+        cookies_path: Path | None = None,
+    ) -> tuple[dict, Path]:
         assert url == parsed_url().original_url
         assert job_dir.exists()
+        assert cookies_path is None
         return (
             {
                 "title": "A <title>",
@@ -93,7 +147,10 @@ async def test_download_rejects_files_over_configured_limit(tmp_path: Path) -> N
     video_path = tmp_path / "large.mp4"
     video_path.write_bytes(b"too large")
     downloader = VideoDownloader(tmp_path, max_video_size_bytes=3, retries=1)
-    downloader._download_sync = lambda _url, _job_dir: ({}, video_path)  # type: ignore[method-assign]
+    downloader._download_sync = lambda _url, _job_dir, _cookies_path=None: (  # type: ignore[method-assign]
+        {},
+        video_path,
+    )
 
     with pytest.raises(FileTooLargeError):
         await downloader.download(parsed_url())
@@ -105,7 +162,12 @@ async def test_download_raises_restricted_error_for_instagram_access_failure(
 ) -> None:
     downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
 
-    def fake_download_sync(url: str, job_dir: Path) -> tuple[dict, Path]:
+    def fake_download_sync(
+        url: str,
+        job_dir: Path,
+        cookies_path: Path | None = None,
+    ) -> tuple[dict, Path]:
+        assert cookies_path is None
         raise YtDlpDownloadError(
             "ERROR: [Instagram] DR2t_FgCMGy: "
             "This content isn't available to everyone: "
@@ -116,3 +178,75 @@ async def test_download_raises_restricted_error_for_instagram_access_failure(
 
     with pytest.raises(RestrictedVideoError):
         await downloader.download(parsed_url())
+
+
+@pytest.mark.asyncio
+async def test_download_passes_cookies_for_instagram(tmp_path: Path) -> None:
+    video_path = tmp_path / "video.mp4"
+    video_path.write_bytes(b"video")
+    cookies_path = tmp_path / "instagram-cookies.txt"
+    cookies_path.write_text("# Netscape HTTP Cookie File\n")
+    downloader = VideoDownloader(
+        tmp_path,
+        max_video_size_bytes=100,
+        retries=1,
+        instagram_cookies_path=cookies_path,
+    )
+
+    def fake_download_sync(
+        url: str,
+        job_dir: Path,
+        passed_cookies_path: Path | None = None,
+    ) -> tuple[dict, Path]:
+        assert url == instagram_url().original_url
+        assert job_dir.exists()
+        assert passed_cookies_path == cookies_path
+        return ({}, video_path)
+
+    async def fake_download_thumbnail(url: str | None, job_dir: Path) -> None:
+        assert url is None
+        assert job_dir.parent == tmp_path
+
+    downloader._download_sync = fake_download_sync  # type: ignore[method-assign]
+    downloader._download_thumbnail = fake_download_thumbnail  # type: ignore[method-assign]
+
+    downloaded = await downloader.download(instagram_url())
+
+    assert downloaded.video_path == video_path
+
+
+@pytest.mark.asyncio
+async def test_download_logs_alertable_error_for_instagram_auth_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    downloader = VideoDownloader(
+        tmp_path,
+        max_video_size_bytes=100,
+        retries=1,
+        instagram_cookies_path=tmp_path / "instagram-cookies.txt",
+    )
+
+    def fake_download_sync(
+        url: str,
+        job_dir: Path,
+        cookies_path: Path | None = None,
+    ) -> tuple[dict, Path]:
+        raise YtDlpDownloadError(
+            "ERROR: [Instagram] abc: Requested content is not available, "
+            "rate-limit reached or login required. Use --cookies-from-browser "
+            "or --cookies for the authentication."
+        )
+
+    downloader._download_sync = fake_download_sync  # type: ignore[method-assign]
+
+    with caplog.at_level("ERROR", logger="bot.services.downloader"):
+        with pytest.raises(RestrictedVideoError):
+            await downloader.download(instagram_url())
+
+    record = next(
+        record
+        for record in caplog.records
+        if "Instagram cookies/login need attention" in record.getMessage()
+    )
+    assert record.alert_fingerprint == "instagram-auth-required"
