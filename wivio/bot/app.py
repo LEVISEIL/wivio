@@ -66,6 +66,12 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
     dispatcher["inline_cache_time"] = settings.inline_cache_time
     dispatcher["inline_ready_wait_seconds"] = settings.inline_ready_wait_seconds
     dispatcher["bot_username"] = settings.bot_username
+    dispatcher["welcome_forward_chat_id"] = settings.welcome_forward_chat_id
+    dispatcher["welcome_forward_message_id"] = settings.welcome_forward_message_id
+    dispatcher["welcome_animation_url"] = settings.welcome_animation_url
+    dispatcher["welcome_animation_path"] = settings.welcome_animation_path
+    dispatcher["welcome_animation_file_id"] = settings.welcome_animation_file_id
+    dispatcher["welcome_video_file_id"] = settings.welcome_video_file_id
     dispatcher["admin_user_ids"] = settings.admin_user_ids
     dispatcher.include_router(start_router)
     dispatcher.include_router(inline_router)
