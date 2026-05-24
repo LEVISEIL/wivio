@@ -1,7 +1,7 @@
 services:
   telegram-inline-video-bot:
     build: .
-    container_name: telegram-inline-video-bot
+    container_name: wivio-bot
     restart: unless-stopped
     env_file:
       - .env
@@ -10,7 +10,12 @@ services:
       - ./downloads:/app/downloads
       - ./logs:/app/logs
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3).read()"]
       interval: 30s
