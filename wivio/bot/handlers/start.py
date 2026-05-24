@@ -6,13 +6,18 @@ from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from bot.database.models import UserStats
+from bot.database.repositories import UserRepository
+
 logger = logging.getLogger(__name__)
 
 router = Router(name="start")
 
 
-async def handle_start(message: Message, bot_username: str) -> None:
+async def handle_start(message: Message, bot_username: str, users: UserRepository) -> None:
     logger.info("Start command user_id=%s", message.from_user.id if message.from_user else None)
+    if message.from_user is not None:
+        await users.touch(message.from_user, "start")
     await message.answer(
         text=start_message(bot_username),
         reply_markup=start_keyboard(),
@@ -27,6 +32,27 @@ async def handle_chat_id(message: Message) -> None:
         message.chat.id,
     )
     await message.answer(chat_id_message(message.chat.id))
+
+
+async def handle_my_id(message: Message) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    logger.info("User id requested user_id=%s", user_id)
+    await message.answer(my_id_message(user_id))
+
+
+async def handle_stats(
+    message: Message,
+    users: UserRepository,
+    admin_user_ids: frozenset[int],
+) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    if user_id not in admin_user_ids:
+        logger.warning("Stats command denied user_id=%s", user_id)
+        await message.answer("Команда доступна только администратору.")
+        return
+
+    logger.info("Stats command user_id=%s", user_id)
+    await message.answer(stats_message(await users.stats()))
 
 
 def start_message(bot_username: str) -> str:
@@ -48,6 +74,27 @@ def chat_id_message(chat_id: int) -> str:
     return f"Chat ID для алертов: <code>{chat_id}</code>"
 
 
+def my_id_message(user_id: int | None) -> str:
+    if user_id is None:
+        return "Не удалось определить ваш Telegram user id."
+    return f"Ваш Telegram user id: <code>{user_id}</code>"
+
+
+def stats_message(stats: UserStats) -> str:
+    return (
+        "<b>Статистика Wivio</b>\n\n"
+        f"Всего пользователей: <b>{stats.total_users}</b>\n"
+        f"Активных за 24 часа: <b>{stats.active_today}</b>\n"
+        f"Активных за 7 дней: <b>{stats.active_7_days}</b>\n"
+        f"Новых за 24 часа: <b>{stats.new_today}</b>\n\n"
+        f"Inline-запросов всего: <b>{stats.inline_queries}</b>\n"
+        f"Успешных выдач видео: <b>{stats.successful_requests}</b>\n"
+        f"Ошибок у пользователей: <b>{stats.failed_requests}</b>\n\n"
+        f"Видео в кэше: <b>{stats.cached_videos}</b>\n"
+        f"Ошибок загрузки за 24 часа: <b>{stats.errors_24h}</b>"
+    )
+
+
 def start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -63,3 +110,5 @@ def start_keyboard() -> InlineKeyboardMarkup:
 
 router.message(CommandStart())(handle_start)
 router.message(Command("chatid"))(handle_chat_id)
+router.message(Command("myid"))(handle_my_id)
+router.message(Command("stats"))(handle_stats)

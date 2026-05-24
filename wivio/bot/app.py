@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramAPIError
 
 from bot.config import Settings
 from bot.database.connection import Database
-from bot.database.repositories import EventRepository, VideoRepository
+from bot.database.repositories import EventRepository, UserRepository, VideoRepository
 from bot.handlers.inline import router as inline_router
 from bot.handlers.start import router as start_router
 from bot.middlewares.rate_limit import InlineRateLimitMiddleware
@@ -39,6 +39,7 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
 
     video_repo = VideoRepository(database.connection)
     event_repo = EventRepository(database.connection)
+    user_repo = UserRepository(database.connection)
     downloader = VideoDownloader(
         downloads_dir=settings.downloads_dir,
         max_video_size_bytes=settings.max_video_size_bytes,
@@ -59,9 +60,11 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
 
     dispatcher = Dispatcher()
     dispatcher["video_cache"] = video_cache
+    dispatcher["users"] = user_repo
     dispatcher["inline_cache_time"] = settings.inline_cache_time
     dispatcher["inline_ready_wait_seconds"] = settings.inline_ready_wait_seconds
     dispatcher["bot_username"] = settings.bot_username
+    dispatcher["admin_user_ids"] = settings.admin_user_ids
     dispatcher.include_router(start_router)
     dispatcher.include_router(inline_router)
     dispatcher.inline_query.middleware(

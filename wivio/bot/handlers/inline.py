@@ -10,6 +10,7 @@ from aiogram.handlers import InlineQueryHandler
 from aiogram.types import InlineQuery, InlineQueryResultsButton
 
 from bot.database.models import CachedVideo
+from bot.database.repositories import UserRepository
 from bot.services.errors import VideoBotError
 from bot.services.video_cache import FAILED_STATUS, TIMEOUT_STATUS, VideoCacheService
 from bot.utils.inline_results import article_result, cached_video_result
@@ -24,8 +25,10 @@ class VideoInlineQueryHandler(InlineQueryHandler):
     async def handle(self) -> Any:
         inline_query: InlineQuery = self.event
         video_cache: VideoCacheService = self.data["video_cache"]
+        users: UserRepository = self.data["users"]
         cache_time: int = self.data["inline_cache_time"]
         ready_wait_seconds: int = self.data["inline_ready_wait_seconds"]
+        await users.touch(inline_query.from_user, "inline")
 
         query = inline_query.query.strip()
         if not query:
@@ -114,6 +117,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                 status,
             )
             if status in {FAILED_STATUS, TIMEOUT_STATUS}:
+                await users.increment_failure(inline_query.from_user.id)
                 await _answer_inline(
                     inline_query,
                     results=[],
@@ -153,6 +157,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             cached.normalized_url,
             cached.platform,
         )
+        await users.increment_success(inline_query.from_user.id)
         await _answer_inline(
             inline_query,
             results=[_cached_video_inline_result(cached, description)],
