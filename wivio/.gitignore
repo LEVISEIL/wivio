@@ -31,6 +31,8 @@ downloads/*
 !downloads/.gitkeep
 logs/*
 !logs/.gitkeep
+secrets/*
+!secrets/.gitkeep
 
 # SQLite sidecar files
 *.sqlite3

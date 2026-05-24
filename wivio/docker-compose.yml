@@ -9,6 +9,7 @@ services:
       - ./data:/app/data
       - ./downloads:/app/downloads
       - ./logs:/app/logs
+      - ./secrets:/app/secrets:ro
     ports:
       - "127.0.0.1:8080:8080"
     logging:

@@ -126,6 +126,7 @@ INLINE_DOWNLOAD_TIMEOUT=45
 INLINE_READY_WAIT_SECONDS=12
 MAX_CACHED_VIDEOS=5000
 CACHE_TRIM_TO_VIDEOS=4500
+INSTAGRAM_COOKIES_PATH=
 WELCOME_FORWARD_CHAT_ID=
 WELCOME_FORWARD_MESSAGE_ID=
 WELCOME_ANIMATION_URL=
@@ -161,6 +162,13 @@ Admin commands:
   put a direct HTTPS GIF/MP4 link into `WELCOME_ANIMATION_URL`, a local silent MP4/GIF path into
   `WELCOME_ANIMATION_PATH`, or send a silent MP4/GIF animation to the bot and put the returned
   value into `WELCOME_ANIMATION_FILE_ID`. For a regular video fallback, use `WELCOME_VIDEO_FILE_ID`.
+
+Instagram cookies:
+
+- `INSTAGRAM_COOKIES_PATH` can point to a Netscape-format cookies file for Instagram, for example
+  `/app/secrets/instagram-cookies.txt` in Docker.
+- Cookies are used only for Instagram downloads.
+- Never commit cookies. Keep them in `secrets/`, which is mounted read-only by Docker Compose.
 
 For webhook mode:
 

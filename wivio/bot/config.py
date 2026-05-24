@@ -74,6 +74,7 @@ class Settings:
     inline_ready_wait_seconds: int
     max_cached_videos: int
     cache_trim_to_videos: int
+    instagram_cookies_path: Path | None
     download_retries: int
     upload_retries: int
 
@@ -151,6 +152,7 @@ def load_settings() -> Settings:
         inline_ready_wait_seconds=_int("INLINE_READY_WAIT_SECONDS", 12),
         max_cached_videos=_int("MAX_CACHED_VIDEOS", 5000),
         cache_trim_to_videos=_int("CACHE_TRIM_TO_VIDEOS", 4500),
+        instagram_cookies_path=_optional_path("INSTAGRAM_COOKIES_PATH"),
         download_retries=_int("DOWNLOAD_RETRIES", 2),
         upload_retries=_int("UPLOAD_RETRIES", 2),
         rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 6),

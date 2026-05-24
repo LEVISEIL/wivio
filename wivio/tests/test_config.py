@@ -31,6 +31,7 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.inline_ready_wait_seconds == 12
     assert settings.max_cached_videos == 5000
     assert settings.cache_trim_to_videos == 4500
+    assert settings.instagram_cookies_path is None
     assert settings.alerts_enabled is False
     assert settings.alert_bot_token == "123:token"
     assert settings.alert_chat_id == ""
@@ -77,6 +78,7 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         inline_ready_wait_seconds=12,
         max_cached_videos=5000,
         cache_trim_to_videos=4500,
+        instagram_cookies_path=None,
         download_retries=2,
         upload_retries=2,
         rate_limit_per_minute=6,

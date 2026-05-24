@@ -44,6 +44,7 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
         downloads_dir=settings.downloads_dir,
         max_video_size_bytes=settings.max_video_size_bytes,
         retries=settings.download_retries,
+        instagram_cookies_path=settings.instagram_cookies_path,
     )
     uploader = TelegramUploader(
         bot=bot,

@@ -26,6 +26,7 @@ env/
 data/
 downloads/
 logs/
+secrets/
 
 # Local docs/cache noise
 *.log

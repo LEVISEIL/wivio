@@ -157,6 +157,10 @@ def _is_polling_conflict(record: logging.LogRecord) -> bool:
 
 
 def _alert_fingerprint(record: logging.LogRecord) -> str:
+    custom_fingerprint = getattr(record, "alert_fingerprint", None)
+    if custom_fingerprint:
+        return str(custom_fingerprint)
+
     return "|".join(
         [
             record.name,
