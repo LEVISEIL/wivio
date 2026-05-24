@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from aiogram import Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,15 @@ async def handle_start(message: Message, bot_username: str) -> None:
         reply_markup=start_keyboard(),
         disable_web_page_preview=True,
     )
+
+
+async def handle_chat_id(message: Message) -> None:
+    logger.info(
+        "Chat id requested user_id=%s chat_id=%s",
+        message.from_user.id if message.from_user else None,
+        message.chat.id,
+    )
+    await message.answer(chat_id_message(message.chat.id))
 
 
 def start_message(bot_username: str) -> str:
@@ -35,6 +44,10 @@ def start_message(bot_username: str) -> str:
     )
 
 
+def chat_id_message(chat_id: int) -> str:
+    return f"Chat ID для алертов: <code>{chat_id}</code>"
+
+
 def start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -49,3 +62,4 @@ def start_keyboard() -> InlineKeyboardMarkup:
 
 
 router.message(CommandStart())(handle_start)
+router.message(Command("chatid"))(handle_chat_id)

@@ -22,6 +22,11 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.bot_mode == "polling"
     assert settings.max_video_size_bytes == 49 * 1024 * 1024
     assert settings.inline_ready_wait_seconds == 12
+    assert settings.alerts_enabled is False
+    assert settings.alert_bot_token == "123:token"
+    assert settings.alert_chat_id == ""
+    assert settings.alert_level == "ERROR"
+    assert settings.alert_ssl_verify is True
     assert settings.debug is True
 
 
@@ -61,6 +66,11 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         temp_file_ttl_seconds=3600,
         cleanup_interval_seconds=900,
         log_level="INFO",
+        alerts_enabled=False,
+        alert_bot_token="token",
+        alert_chat_id="",
+        alert_level="ERROR",
+        alert_ssl_verify=True,
         debug=False,
     )
 

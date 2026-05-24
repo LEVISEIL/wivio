@@ -52,6 +52,11 @@ class Settings:
     cleanup_interval_seconds: int
 
     log_level: str
+    alerts_enabled: bool
+    alert_bot_token: str
+    alert_chat_id: str
+    alert_level: str
+    alert_ssl_verify: bool
     debug: bool
 
     @property
@@ -112,5 +117,10 @@ def load_settings() -> Settings:
         temp_file_ttl_seconds=_int("TEMP_FILE_TTL_SECONDS", 3600),
         cleanup_interval_seconds=_int("CLEANUP_INTERVAL_SECONDS", 900),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
+        alerts_enabled=_bool(os.getenv("ALERTS_ENABLED"), False),
+        alert_bot_token=os.getenv("ALERT_BOT_TOKEN", token).strip(),
+        alert_chat_id=os.getenv("ALERT_CHAT_ID", "").strip(),
+        alert_level=os.getenv("ALERT_LEVEL", "ERROR").strip().upper(),
+        alert_ssl_verify=_bool(os.getenv("ALERT_SSL_VERIFY"), True),
         debug=_bool(os.getenv("DEBUG"), False),
     )
