@@ -11,6 +11,7 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     monkeypatch.setenv("BOT_USERNAME", "@wivio_bot")
     monkeypatch.setenv("UPLOAD_CHAT_ID", "-100123")
     monkeypatch.setenv("DATABASE_PATH", "/tmp/test.sqlite3")
+    monkeypatch.setenv("ADMIN_USER_IDS", "42, 100")
     monkeypatch.setenv("DEBUG", "yes")
 
     settings = config.load_settings()
@@ -27,6 +28,7 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.alert_chat_id == ""
     assert settings.alert_level == "ERROR"
     assert settings.alert_ssl_verify is True
+    assert settings.admin_user_ids == frozenset({42, 100})
     assert settings.debug is True
 
 
@@ -71,6 +73,7 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         alert_chat_id="",
         alert_level="ERROR",
         alert_ssl_verify=True,
+        admin_user_ids=frozenset({42}),
         debug=False,
     )
 

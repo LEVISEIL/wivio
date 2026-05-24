@@ -17,3 +17,16 @@ class CachedVideo:
     duration: int | None
     width: int | None
     height: int | None
+
+
+@dataclass(frozen=True)
+class UserStats:
+    total_users: int
+    active_today: int
+    active_7_days: int
+    new_today: int
+    inline_queries: int
+    successful_requests: int
+    failed_requests: int
+    cached_videos: int
+    errors_24h: int

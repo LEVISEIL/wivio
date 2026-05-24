@@ -124,6 +124,7 @@ RATE_LIMIT_PER_MINUTE=6
 COOLDOWN_SECONDS=0
 INLINE_DOWNLOAD_TIMEOUT=45
 INLINE_READY_WAIT_SECONDS=12
+ADMIN_USER_IDS=986436438
 ```
 
 Telegram error alerts:
@@ -138,6 +139,11 @@ ALERT_SSL_VERIFY=true
 
 `ALERT_BOT_TOKEN` can be omitted if alerts should use the main `BOT_TOKEN`.
 Set `ALERT_SSL_VERIFY=false` only for local environments with broken Python CA certificates.
+
+Admin commands:
+
+- `/myid` shows your Telegram user id.
+- `/stats` shows user and cache statistics for ids listed in `ADMIN_USER_IDS`.
 
 For webhook mode:
 

@@ -20,6 +20,16 @@ def _int(name: str, default: int) -> int:
     return int(raw)
 
 
+def _int_set(name: str) -> frozenset[int]:
+    raw = os.getenv(name, "")
+    values: set[int] = set()
+    for item in raw.split(","):
+        value = item.strip()
+        if value:
+            values.add(int(value))
+    return frozenset(values)
+
+
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
@@ -57,6 +67,7 @@ class Settings:
     alert_chat_id: str
     alert_level: str
     alert_ssl_verify: bool
+    admin_user_ids: frozenset[int]
     debug: bool
 
     @property
@@ -122,5 +133,6 @@ def load_settings() -> Settings:
         alert_chat_id=os.getenv("ALERT_CHAT_ID", "").strip(),
         alert_level=os.getenv("ALERT_LEVEL", "ERROR").strip().upper(),
         alert_ssl_verify=_bool(os.getenv("ALERT_SSL_VERIFY"), True),
+        admin_user_ids=_int_set("ADMIN_USER_IDS"),
         debug=_bool(os.getenv("DEBUG"), False),
     )

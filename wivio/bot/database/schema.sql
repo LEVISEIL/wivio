@@ -22,6 +22,21 @@ CREATE TABLE IF NOT EXISTS videos (
 CREATE INDEX IF NOT EXISTS idx_videos_platform ON videos(platform);
 CREATE INDEX IF NOT EXISTS idx_videos_last_used_at ON videos(last_used_at);
 
+CREATE TABLE IF NOT EXISTS users (
+    telegram_user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    first_name TEXT,
+    last_name TEXT,
+    first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    start_count INTEGER NOT NULL DEFAULT 0,
+    inline_queries_count INTEGER NOT NULL DEFAULT 0,
+    successful_requests_count INTEGER NOT NULL DEFAULT 0,
+    failed_requests_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at);
+
 CREATE TABLE IF NOT EXISTS download_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     normalized_url TEXT NOT NULL,
