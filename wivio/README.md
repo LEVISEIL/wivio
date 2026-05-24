@@ -126,6 +126,19 @@ INLINE_DOWNLOAD_TIMEOUT=45
 INLINE_READY_WAIT_SECONDS=12
 ```
 
+Telegram error alerts:
+
+```env
+ALERTS_ENABLED=false
+ALERT_BOT_TOKEN=123456:replace-me
+ALERT_CHAT_ID=-1001234567890
+ALERT_LEVEL=ERROR
+ALERT_SSL_VERIFY=true
+```
+
+`ALERT_BOT_TOKEN` can be omitted if alerts should use the main `BOT_TOKEN`.
+Set `ALERT_SSL_VERIFY=false` only for local environments with broken Python CA certificates.
+
 For webhook mode:
 
 ```env
@@ -218,6 +231,7 @@ Download events are also stored for simple operational diagnostics.
 - FFmpeg is included in Docker. For local PyCharm runs, the default downloader config avoids format merging so FFmpeg is not required for most videos.
 - Some Instagram/TikTok videos may require cookies or may be unavailable due to privacy, age, region, or anti-bot restrictions. This project keeps the service layer ready for adding `yt-dlp` cookie support later.
 - Inline queries have strict response timing. First-time downloads are queued in the background and the bot waits up to `INLINE_READY_WAIT_SECONDS` to return the final video in the same inline query. If the video is still not ready after that, Telegram cannot auto-refresh the same popup, so the bot falls back to a non-sendable loading status.
+- Enable `ALERTS_ENABLED=true` and set `ALERT_CHAT_ID` to receive `ERROR` and `CRITICAL` logs in Telegram.
 - Put the app behind Nginx/Caddy for HTTPS webhook deployments.
 
 ## Troubleshooting

@@ -1,4 +1,4 @@
-from bot.handlers.start import start_keyboard, start_message
+from bot.handlers.start import chat_id_message, start_keyboard, start_message
 
 
 def test_start_message_explains_inline_usage() -> None:
@@ -17,3 +17,7 @@ def test_start_keyboard_opens_inline_mode_in_current_chat() -> None:
 
     assert button.text == "Попробовать в этом чате"
     assert button.switch_inline_query_current_chat == ""
+
+
+def test_chat_id_message_contains_chat_id() -> None:
+    assert chat_id_message(-100123) == "Chat ID для алертов: <code>-100123</code>"

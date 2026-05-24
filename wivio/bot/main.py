@@ -16,7 +16,15 @@ logger = logging.getLogger(__name__)
 
 async def run_polling() -> None:
     settings = load_settings()
-    setup_logging(settings.logs_dir, settings.log_level)
+    setup_logging(
+        settings.logs_dir,
+        settings.log_level,
+        telegram_alerts_enabled=settings.alerts_enabled,
+        telegram_alert_bot_token=settings.alert_bot_token,
+        telegram_alert_chat_id=settings.alert_chat_id,
+        telegram_alert_level=settings.alert_level,
+        telegram_alert_ssl_verify=settings.alert_ssl_verify,
+    )
     logger.info("Starting bot in polling mode")
     bot, dispatcher, database, cleanup = await build_app(settings)
 
@@ -50,7 +58,15 @@ async def run_polling() -> None:
 
 async def run_webhook() -> None:
     settings = load_settings()
-    setup_logging(settings.logs_dir, settings.log_level)
+    setup_logging(
+        settings.logs_dir,
+        settings.log_level,
+        telegram_alerts_enabled=settings.alerts_enabled,
+        telegram_alert_bot_token=settings.alert_bot_token,
+        telegram_alert_chat_id=settings.alert_chat_id,
+        telegram_alert_level=settings.alert_level,
+        telegram_alert_ssl_verify=settings.alert_ssl_verify,
+    )
     logger.info("Starting bot in webhook mode")
     if not settings.webhook_endpoint:
         logger.critical("WEBHOOK_URL is required when BOT_MODE=webhook")
