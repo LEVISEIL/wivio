@@ -215,6 +215,43 @@ async def test_download_passes_cookies_for_instagram(tmp_path: Path) -> None:
     assert downloaded.video_path == video_path
 
 
+def test_download_sync_uses_temporary_cookiefile_copy(tmp_path: Path, monkeypatch) -> None:
+    video_path = tmp_path / "job" / "Instagram-abc.mp4"
+    video_path.parent.mkdir()
+    video_path.write_bytes(b"video")
+    cookies_path = tmp_path / "instagram-cookies.txt"
+    cookies_path.write_text("# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tTRUE\t0\ta\tb\n")
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    captured_cookiefile: str | None = None
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            nonlocal captured_cookiefile
+            captured_cookiefile = options["cookiefile"]
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            return {}
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+
+    downloader._download_sync(
+        "https://www.instagram.com/reel/abc/",
+        video_path.parent,
+        cookies_path,
+    )
+
+    assert captured_cookiefile is not None
+    assert Path(captured_cookiefile) == video_path.parent / "cookies.txt"
+    assert Path(captured_cookiefile).read_text() == cookies_path.read_text()
+
+
 @pytest.mark.asyncio
 async def test_download_logs_alertable_error_for_instagram_auth_failure(
     tmp_path: Path,
