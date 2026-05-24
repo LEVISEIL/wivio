@@ -7,8 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from time import monotonic
 
 import aiohttp
+
+DEFAULT_ALERT_SUPPRESS_SECONDS = 300
 
 
 class TelegramAlertHandler(logging.Handler):
@@ -20,6 +23,7 @@ class TelegramAlertHandler(logging.Handler):
         timeout_seconds: int = 5,
         ssl_verify: bool = True,
         level: int | str = logging.ERROR,
+        duplicate_suppress_seconds: int = DEFAULT_ALERT_SUPPRESS_SECONDS,
     ) -> None:
         super().__init__(level)
         self.bot_token = bot_token
@@ -27,10 +31,14 @@ class TelegramAlertHandler(logging.Handler):
         self.message_thread_id = message_thread_id
         self.timeout_seconds = timeout_seconds
         self.ssl_verify = ssl_verify
+        self.duplicate_suppress_seconds = duplicate_suppress_seconds
+        self._last_sent_at: dict[str, float] = {}
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="telegram-alert")
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            if self._is_duplicate(record):
+                return
             message = self._format_message(record)
             self._executor.submit(self._send_message, message)
         except Exception:
@@ -45,6 +53,19 @@ class TelegramAlertHandler(logging.Handler):
         if len(message) <= 3900:
             return message
         return f"{message[:3900]}\n...[truncated]"
+
+    def _is_duplicate(self, record: logging.LogRecord) -> bool:
+        if self.duplicate_suppress_seconds <= 0:
+            return False
+
+        now = monotonic()
+        fingerprint = _alert_fingerprint(record)
+        last_sent_at = self._last_sent_at.get(fingerprint)
+        if last_sent_at is not None and now - last_sent_at < self.duplicate_suppress_seconds:
+            return True
+
+        self._last_sent_at[fingerprint] = now
+        return False
 
     def _send_message(self, text: str) -> None:
         try:
@@ -126,6 +147,27 @@ def setup_logging(
     logging.getLogger("yt_dlp").setLevel(logging.WARNING)
 
 
+def _is_polling_conflict(record: logging.LogRecord) -> bool:
+    message = record.getMessage().lower()
+    if record.name == "aiogram.dispatcher" and "telegramconflicterror" in message:
+        return True
+    if "terminated by other getupdates request" in message:
+        return True
+    return False
+
+
+def _alert_fingerprint(record: logging.LogRecord) -> str:
+    return "|".join(
+        [
+            record.name,
+            record.levelname,
+            record.pathname,
+            str(record.lineno),
+            record.getMessage(),
+        ]
+    )
+
+
 def _parse_level(value: str, default: int) -> int:
     level = getattr(logging, value.strip().upper(), None)
     if isinstance(level, int):
@@ -135,6 +177,9 @@ def _parse_level(value: str, default: int) -> int:
 
 def _format_telegram_alert(record: logging.LogRecord) -> str:
     timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    if _is_polling_conflict(record):
+        return _format_polling_conflict_alert(record, timestamp)
+
     lines = [
         f"{_level_icon(record.levelno)} <b>Wivio Alert</b>",
         "",
@@ -144,6 +189,28 @@ def _format_telegram_alert(record: logging.LogRecord) -> str:
         f"<b>Location:</b> <code>{_html_escape(record.pathname)}:{record.lineno}</code>",
         "",
         "<b>Message:</b>",
+        f"<code>{_html_escape(record.getMessage())}</code>",
+    ]
+    if record.exc_info:
+        stacktrace = "".join(traceback.format_exception(*record.exc_info)).strip()
+        lines.extend(["", "<b>Traceback:</b>", f"<pre>{_html_escape(stacktrace)}</pre>"])
+    return "\n".join(lines)
+
+
+def _format_polling_conflict_alert(record: logging.LogRecord, timestamp: str) -> str:
+    lines = [
+        f"{_level_icon(record.levelno)} <b>Wivio Alert</b>",
+        "",
+        f"<b>Level:</b> <code>{_html_escape(record.levelname)}</code>",
+        f"<b>Logger:</b> <code>{_html_escape(record.name)}</code>",
+        f"<b>Time:</b> <code>{timestamp}</code>",
+        f"<b>Location:</b> <code>{_html_escape(record.pathname)}:{record.lineno}</code>",
+        "",
+        "<b>Message:</b>",
+        "<code>Bot is already running somewhere else. Stop the other polling instance "
+        "before starting this one.</code>",
+        "",
+        "<b>Original:</b>",
         f"<code>{_html_escape(record.getMessage())}</code>",
     ]
     if record.exc_info:

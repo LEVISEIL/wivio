@@ -1,9 +1,15 @@
 from pathlib import Path
 
 import pytest
+from yt_dlp import DownloadError as YtDlpDownloadError
 
-from bot.services.downloader import VideoDownloader, build_caption, html_escape
-from bot.services.errors import FileTooLargeError
+from bot.services.downloader import (
+    VideoDownloader,
+    _is_restricted_instagram_error,
+    build_caption,
+    html_escape,
+)
+from bot.services.errors import FileTooLargeError, RestrictedVideoError
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 
@@ -30,6 +36,13 @@ def test_build_caption_limits_title_and_escapes_url() -> None:
     assert "Youtube Shorts" in caption
     assert "&quot;b&quot;" in caption
     assert "&lt;d&gt;" in caption
+
+
+def test_detects_restricted_instagram_errors() -> None:
+    assert _is_restricted_instagram_error(
+        "[Instagram] id: This content isn't available to everyone"
+    )
+    assert not _is_restricted_instagram_error("[YouTube] id: private video")
 
 
 @pytest.mark.asyncio
@@ -83,4 +96,23 @@ async def test_download_rejects_files_over_configured_limit(tmp_path: Path) -> N
     downloader._download_sync = lambda _url, _job_dir: ({}, video_path)  # type: ignore[method-assign]
 
     with pytest.raises(FileTooLargeError):
+        await downloader.download(parsed_url())
+
+
+@pytest.mark.asyncio
+async def test_download_raises_restricted_error_for_instagram_access_failure(
+    tmp_path: Path,
+) -> None:
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+
+    def fake_download_sync(url: str, job_dir: Path) -> tuple[dict, Path]:
+        raise YtDlpDownloadError(
+            "ERROR: [Instagram] DR2t_FgCMGy: "
+            "This content isn't available to everyone: "
+            "It can't be seen by certain audiences."
+        )
+
+    downloader._download_sync = fake_download_sync  # type: ignore[method-assign]
+
+    with pytest.raises(RestrictedVideoError):
         await downloader.download(parsed_url())

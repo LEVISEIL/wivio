@@ -5,7 +5,8 @@ import pytest
 
 from bot.database.models import CachedVideo
 from bot.services.downloader import DownloadedVideo
-from bot.services.video_cache import FAILED_STATUS, VideoCacheService
+from bot.services.errors import RestrictedVideoError
+from bot.services.video_cache import FAILED_STATUS, RESTRICTED_STATUS, VideoCacheService
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 
@@ -238,4 +239,34 @@ async def test_background_failure_is_logged_and_can_be_retried(tmp_path: Path) -
 
     assert result is None
     assert status == FAILED_STATUS
+    assert downloader.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_restricted_video_is_remembered_without_generic_error(tmp_path: Path) -> None:
+    class RestrictedDownloader(FakeDownloader):
+        async def download(self, parsed_url: ParsedVideoUrl) -> DownloadedVideo:
+            self.calls += 1
+            raise RestrictedVideoError("restricted")
+
+    videos = FakeVideoRepository()
+    events = FakeEventRepository()
+    downloader = RestrictedDownloader(downloaded_video(tmp_path))
+    uploader = FakeUploader()
+    service = VideoCacheService(videos, events, downloader, uploader, timeout_seconds=5)
+
+    result, status = await service.get_or_enqueue(parsed_url(), user_id=42)
+    assert result is None
+    assert status == "queued"
+
+    task = next(iter(service._inflight.values()))
+    await asyncio.wait_for(task, timeout=1)
+
+    assert events.events[-1][3] == RESTRICTED_STATUS
+    assert service.get_recent_failure_status(parsed_url().normalized_url) == RESTRICTED_STATUS
+
+    result, status = await service.get_or_enqueue(parsed_url(), user_id=42)
+
+    assert result is None
+    assert status == RESTRICTED_STATUS
     assert downloader.calls == 1

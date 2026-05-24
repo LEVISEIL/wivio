@@ -10,7 +10,7 @@ from time import monotonic
 from bot.database.models import CachedVideo
 from bot.database.repositories import EventRepository, VideoRepository
 from bot.services.downloader import VideoDownloader
-from bot.services.errors import TimeoutError
+from bot.services.errors import RestrictedVideoError, TimeoutError
 from bot.services.uploader import TelegramUploader
 from bot.utils.urls import ParsedVideoUrl
 
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 FAILED_STATUS = "error"
 TIMEOUT_STATUS = "timeout"
+RESTRICTED_STATUS = "restricted"
 FAILURE_TTL_SECONDS = 300
 
 
@@ -329,6 +330,23 @@ class VideoCacheService:
                 str(exc),
             )
             logger.warning("Background processing timed out for %s", parsed_url.normalized_url)
+        except RestrictedVideoError as exc:
+            self._remember_failure(
+                parsed_url.normalized_url,
+                RESTRICTED_STATUS,
+                str(exc),
+            )
+            await self.events.add(
+                parsed_url.normalized_url,
+                user_id,
+                parsed_url.platform.value,
+                RESTRICTED_STATUS,
+                str(exc)[:500],
+            )
+            logger.warning(
+                "Background processing found restricted video normalized_url=%s",
+                parsed_url.normalized_url,
+            )
         except Exception as exc:
             self._remember_failure(
                 parsed_url.normalized_url,
@@ -373,6 +391,12 @@ class VideoCacheService:
                 trim_to,
                 deleted,
             )
+
+    def get_recent_failure_status(self, normalized_url: str) -> str | None:
+        failure = self._get_recent_failure(normalized_url)
+        if failure is None:
+            return None
+        return failure.status
 
     def _remember_failure(self, normalized_url: str, status: str, error: str) -> None:
         self._failures[normalized_url] = ProcessingFailure(
