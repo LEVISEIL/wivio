@@ -18,7 +18,7 @@ def test_start_message_explains_inline_usage() -> None:
     assert "<code>@wivio_bot</code>" in message
     assert "TikTok" in message
     assert "YouTube Shorts" in message
-    assert "первый раз видео может готовиться несколько секунд" in message
+    assert "обычно это занимает до 5 секунд" in message
 
 
 def test_start_keyboard_opens_inline_mode_in_current_chat() -> None:
