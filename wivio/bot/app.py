@@ -56,6 +56,8 @@ async def build_app(settings: Settings) -> tuple[Bot, Dispatcher, Database, Clea
         downloader=downloader,
         uploader=uploader,
         timeout_seconds=settings.inline_download_timeout,
+        max_cached_videos=settings.max_cached_videos,
+        cache_trim_to_videos=settings.cache_trim_to_videos,
     )
 
     dispatcher = Dispatcher()

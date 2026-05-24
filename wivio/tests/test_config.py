@@ -23,9 +23,12 @@ def test_load_settings_reads_required_and_default_values(monkeypatch: pytest.Mon
     assert settings.bot_mode == "polling"
     assert settings.max_video_size_bytes == 49 * 1024 * 1024
     assert settings.inline_ready_wait_seconds == 12
+    assert settings.max_cached_videos == 5000
+    assert settings.cache_trim_to_videos == 4500
     assert settings.alerts_enabled is False
     assert settings.alert_bot_token == "123:token"
     assert settings.alert_chat_id == ""
+    assert settings.alert_message_thread_id is None
     assert settings.alert_level == "ERROR"
     assert settings.alert_ssl_verify is True
     assert settings.admin_user_ids == frozenset({42, 100})
@@ -60,6 +63,8 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         max_video_size_mb=49,
         inline_download_timeout=45,
         inline_ready_wait_seconds=12,
+        max_cached_videos=5000,
+        cache_trim_to_videos=4500,
         download_retries=2,
         upload_retries=2,
         rate_limit_per_minute=6,
@@ -71,6 +76,7 @@ def test_webhook_endpoint_appends_path_when_needed() -> None:
         alerts_enabled=False,
         alert_bot_token="token",
         alert_chat_id="",
+        alert_message_thread_id=None,
         alert_level="ERROR",
         alert_ssl_verify=True,
         admin_user_ids=frozenset({42}),

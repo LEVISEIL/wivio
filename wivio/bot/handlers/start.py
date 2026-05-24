@@ -27,11 +27,12 @@ async def handle_start(message: Message, bot_username: str, users: UserRepositor
 
 async def handle_chat_id(message: Message) -> None:
     logger.info(
-        "Chat id requested user_id=%s chat_id=%s",
+        "Chat id requested user_id=%s chat_id=%s thread_id=%s",
         message.from_user.id if message.from_user else None,
         message.chat.id,
+        message.message_thread_id,
     )
-    await message.answer(chat_id_message(message.chat.id))
+    await message.answer(chat_id_message(message.chat.id, message.message_thread_id))
 
 
 async def handle_my_id(message: Message) -> None:
@@ -70,8 +71,11 @@ def start_message(bot_username: str) -> str:
     )
 
 
-def chat_id_message(chat_id: int) -> str:
-    return f"Chat ID для алертов: <code>{chat_id}</code>"
+def chat_id_message(chat_id: int, message_thread_id: int | None = None) -> str:
+    message = f"Chat ID для алертов: <code>{chat_id}</code>"
+    if message_thread_id is not None:
+        message += f"\nThread ID для этой темы: <code>{message_thread_id}</code>"
+    return message
 
 
 def my_id_message(user_id: int | None) -> str:

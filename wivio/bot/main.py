@@ -22,6 +22,7 @@ async def run_polling() -> None:
         telegram_alerts_enabled=settings.alerts_enabled,
         telegram_alert_bot_token=settings.alert_bot_token,
         telegram_alert_chat_id=settings.alert_chat_id,
+        telegram_alert_message_thread_id=settings.alert_message_thread_id,
         telegram_alert_level=settings.alert_level,
         telegram_alert_ssl_verify=settings.alert_ssl_verify,
     )
@@ -64,6 +65,7 @@ async def run_webhook() -> None:
         telegram_alerts_enabled=settings.alerts_enabled,
         telegram_alert_bot_token=settings.alert_bot_token,
         telegram_alert_chat_id=settings.alert_chat_id,
+        telegram_alert_message_thread_id=settings.alert_message_thread_id,
         telegram_alert_level=settings.alert_level,
         telegram_alert_ssl_verify=settings.alert_ssl_verify,
     )

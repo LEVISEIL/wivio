@@ -20,6 +20,13 @@ def _int(name: str, default: int) -> int:
     return int(raw)
 
 
+def _optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return None
+    return int(raw)
+
+
 def _int_set(name: str) -> frozenset[int]:
     raw = os.getenv(name, "")
     values: set[int] = set()
@@ -52,6 +59,8 @@ class Settings:
     max_video_size_mb: int
     inline_download_timeout: int
     inline_ready_wait_seconds: int
+    max_cached_videos: int
+    cache_trim_to_videos: int
     download_retries: int
     upload_retries: int
 
@@ -65,6 +74,7 @@ class Settings:
     alerts_enabled: bool
     alert_bot_token: str
     alert_chat_id: str
+    alert_message_thread_id: int | None
     alert_level: str
     alert_ssl_verify: bool
     admin_user_ids: frozenset[int]
@@ -120,6 +130,8 @@ def load_settings() -> Settings:
         max_video_size_mb=_int("MAX_VIDEO_SIZE_MB", 49),
         inline_download_timeout=_int("INLINE_DOWNLOAD_TIMEOUT", 45),
         inline_ready_wait_seconds=_int("INLINE_READY_WAIT_SECONDS", 12),
+        max_cached_videos=_int("MAX_CACHED_VIDEOS", 5000),
+        cache_trim_to_videos=_int("CACHE_TRIM_TO_VIDEOS", 4500),
         download_retries=_int("DOWNLOAD_RETRIES", 2),
         upload_retries=_int("UPLOAD_RETRIES", 2),
         rate_limit_per_minute=_int("RATE_LIMIT_PER_MINUTE", 6),
@@ -131,6 +143,7 @@ def load_settings() -> Settings:
         alerts_enabled=_bool(os.getenv("ALERTS_ENABLED"), False),
         alert_bot_token=os.getenv("ALERT_BOT_TOKEN", token).strip(),
         alert_chat_id=os.getenv("ALERT_CHAT_ID", "").strip(),
+        alert_message_thread_id=_optional_int("ALERT_MESSAGE_THREAD_ID"),
         alert_level=os.getenv("ALERT_LEVEL", "ERROR").strip().upper(),
         alert_ssl_verify=_bool(os.getenv("ALERT_SSL_VERIFY"), True),
         admin_user_ids=_int_set("ADMIN_USER_IDS"),
