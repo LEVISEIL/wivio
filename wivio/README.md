@@ -209,6 +209,8 @@ make check
 
 ## Docker Run
 
+For a full server deployment checklist, see [DEPLOY.md](DEPLOY.md).
+
 ```bash
 docker compose up -d --build
 ```
