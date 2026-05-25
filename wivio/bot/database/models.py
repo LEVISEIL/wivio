@@ -30,3 +30,4 @@ class UserStats:
     failed_requests: int
     cached_videos: int
     errors_24h: int
+    errors_7d: int

@@ -278,13 +278,19 @@ class VideoCacheService:
         return cached
 
     async def _download_upload_and_store(self, parsed_url: ParsedVideoUrl) -> CachedVideo:
+        total_started_at = monotonic()
         logger.info(
             "Processing video normalized_url=%s platform=%s",
             parsed_url.normalized_url,
             parsed_url.platform.value,
         )
+        download_started_at = monotonic()
         downloaded = await self.downloader.download(parsed_url)
+        download_seconds = monotonic() - download_started_at
+
+        upload_started_at = monotonic()
         file_id, file_unique_id = await self.uploader.upload(downloaded)
+        upload_seconds = monotonic() - upload_started_at
 
         cached = CachedVideo(
             normalized_url=downloaded.normalized_url,
@@ -300,9 +306,24 @@ class VideoCacheService:
             width=downloaded.width,
             height=downloaded.height,
         )
+        store_started_at = monotonic()
         await self.videos.upsert(cached)
         await self._trim_video_cache()
+        store_seconds = monotonic() - store_started_at
         self._failures.pop(parsed_url.normalized_url, None)
+        total_seconds = monotonic() - total_started_at
+        logger.info(
+            "Video processing timings normalized_url=%s platform=%s "
+            "download_seconds=%.3f upload_seconds=%.3f store_seconds=%.3f "
+            "total_seconds=%.3f file_size=%s",
+            parsed_url.normalized_url,
+            parsed_url.platform.value,
+            download_seconds,
+            upload_seconds,
+            store_seconds,
+            total_seconds,
+            downloaded.file_size,
+        )
         logger.info("Cached %s", parsed_url.normalized_url)
         return cached
 

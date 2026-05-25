@@ -6,6 +6,7 @@ from yt_dlp import DownloadError as YtDlpDownloadError
 from bot.services.downloader import (
     VideoDownloader,
     _is_instagram_auth_required_error,
+    _is_instagram_follow_required_error,
     _is_restricted_instagram_error,
     build_caption,
     html_escape,
@@ -54,7 +55,21 @@ def test_detects_restricted_instagram_errors() -> None:
     assert _is_restricted_instagram_error(
         "[Instagram] id: Requested content is not available, rate-limit reached or login required"
     )
+    assert _is_restricted_instagram_error(
+        "[Instagram] id: This content is only available for registered users "
+        "who follow this account. Use --cookies-from-browser or --cookies."
+    )
     assert not _is_restricted_instagram_error("[YouTube] id: private video")
+
+
+def test_detects_instagram_follow_required_errors_without_auth_alert() -> None:
+    error = (
+        "[Instagram] id: This content is only available for registered users who follow this "
+        "account. Use --cookies-from-browser or --cookies for the authentication."
+    )
+
+    assert _is_instagram_follow_required_error(error)
+    assert not _is_instagram_auth_required_error(error)
 
 
 def test_detects_instagram_auth_required_errors() -> None:

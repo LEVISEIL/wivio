@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="inline")
 
+BRAND_FOOTER_TEMPLATES = (
+    'Рад был помочь! Ваш, <a href="https://t.me/{username}">@{username}</a>',
+    'Спасибо, что пользуетесь <a href="https://t.me/{username}">@{username}</a>',
+    'Видео готово. Сохраняйте и отправляйте через <a href="https://t.me/{username}">@{username}</a>',
+)
+MAX_INLINE_CAPTION_LENGTH = 1024
+
 
 class VideoInlineQueryHandler(InlineQueryHandler):
     async def handle(self) -> Any:
@@ -33,6 +40,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         users: UserRepository = self.data["users"]
         cache_time: int = self.data["inline_cache_time"]
         ready_wait_seconds: int = self.data["inline_ready_wait_seconds"]
+        bot_username: str = self.data["bot_username"]
         await users.touch(inline_query.from_user, "inline")
 
         query = inline_query.query.strip()
@@ -183,7 +191,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         await users.increment_success(inline_query.from_user.id)
         await _answer_inline(
             inline_query,
-            results=[_cached_video_inline_result(cached, description)],
+            results=[_cached_video_inline_result(cached, description, bot_username)],
             cache_time=cache_time,
             is_personal=True,
         )
@@ -213,7 +221,11 @@ async def _wait_for_inline_ready(
     )
 
 
-def _cached_video_inline_result(cached: CachedVideo, description: str) -> Any:
+def _cached_video_inline_result(
+    cached: CachedVideo,
+    description: str,
+    bot_username: str,
+) -> Any:
     return cached_video_result(
         result_id=_result_id(
             cached.normalized_url,
@@ -221,9 +233,42 @@ def _cached_video_inline_result(cached: CachedVideo, description: str) -> Any:
         ),
         file_id=cached.telegram_file_id,
         title=cached.title,
-        caption=cached.caption,
+        caption=_caption_with_brand_footer(
+            caption=cached.caption,
+            bot_username=bot_username,
+            variant_key=cached.normalized_url,
+        ),
         description=description,
     )
+
+
+def _caption_with_brand_footer(caption: str, bot_username: str, variant_key: str) -> str:
+    footer = _brand_footer(bot_username, variant_key)
+    separator = "\n\n"
+    if not caption:
+        return footer[:MAX_INLINE_CAPTION_LENGTH]
+
+    branded_caption = f"{caption}{separator}{footer}"
+    if len(branded_caption) <= MAX_INLINE_CAPTION_LENGTH:
+        return branded_caption
+
+    max_caption_length = MAX_INLINE_CAPTION_LENGTH - len(separator) - len(footer)
+    if max_caption_length <= 0:
+        return footer[:MAX_INLINE_CAPTION_LENGTH]
+    return f"{caption[:max_caption_length]}{separator}{footer}"
+
+
+def _brand_footer(bot_username: str, variant_key: str) -> str:
+    username = bot_username.lstrip("@")
+    template = BRAND_FOOTER_TEMPLATES[_variant_index(variant_key, len(BRAND_FOOTER_TEMPLATES))]
+    return template.format(username=username)
+
+
+def _variant_index(value: str, size: int) -> int:
+    if size <= 0:
+        return 0
+    digest = sha1(value.encode("utf-8")).hexdigest()
+    return int(digest, 16) % size
 
 
 def _loading_button() -> InlineQueryResultsButton:

@@ -4,13 +4,14 @@ import asyncio
 import logging
 from pathlib import Path
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from bot.database.models import UserStats
 from bot.database.repositories import UserRepository
+from bot.utils.urls import UnsupportedUrlError, parse_video_url
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,19 @@ async def handle_file_id(
     )
 
 
+async def handle_private_fallback(
+    message: Message,
+    bot_username: str,
+) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    logger.info("Private fallback message user_id=%s chat_id=%s", user_id, message.chat.id)
+
+    await message.answer(
+        private_fallback_message(bot_username, message.text or message.caption or ""),
+        disable_web_page_preview=True,
+    )
+
+
 async def forward_welcome_message(
     message: Message,
     from_chat_id: int | None,
@@ -252,13 +266,37 @@ def start_message(bot_username: str) -> str:
     username = bot_username.lstrip("@")
     return (
         "<b>Привет! Я Wivio.</b>\n\n"
-        "Я помогаю отправлять видео из TikTok, Instagram Reels"
+        "Я помогаю отправлять видео из TikTok, Instagram Reels\n\n"
         "и YouTube Shorts прямо через inline-режим Telegram.\n\n"
         "<b>Как пользоваться:</b>\n"
         "1. Открой любой чат.\n"
         f"2. Напиши <code>@{username}</code> и вставь ссылку на видео.\n"
         "3. Дождись обработки: обычно это занимает до 5 секунд\n"
         "4. Когда появится видео, нажми на него, и Telegram отправит его в чат.\n\n"
+    )
+
+
+def private_fallback_message(bot_username: str, text: str) -> str:
+    username = bot_username.lstrip("@")
+    try:
+        parsed = parse_video_url(text)
+    except UnsupportedUrlError:
+        return usage_hint_message(username)
+
+    return (
+        "Чтобы отправить это видео, открой нужный чат и напиши:\n\n"
+        f"<code>@{username} {parsed.original_url}</code>\n\n"
+        "Потом дождись, когда появится видео, нажми на него, и Telegram отправит его в чат."
+    )
+
+
+def usage_hint_message(username: str) -> str:
+    return (
+        "Чтобы отправить видео:\n\n"
+        "1. Открой чат, куда хочешь его отправить.\n"
+        f"2. Напиши <code>@{username}</code> и вставь ссылку на видео.\n"
+        "3. Дождись, когда появится видео, и нажми на него.\n\n"
+        "Поддерживаются TikTok, Instagram Reels и YouTube Shorts."
     )
 
 
@@ -286,7 +324,8 @@ def stats_message(stats: UserStats) -> str:
         f"Успешных выдач видео: <b>{stats.successful_requests}</b>\n"
         f"Ошибок у пользователей: <b>{stats.failed_requests}</b>\n\n"
         f"Видео в кэше: <b>{stats.cached_videos}</b>\n"
-        f"Ошибок загрузки за 24 часа: <b>{stats.errors_24h}</b>"
+        f"Ошибок загрузки за 24 часа: <b>{stats.errors_24h}</b>\n"
+        f"Ошибок загрузки за 7 дней: <b>{stats.errors_7d}</b>"
     )
 
 
@@ -325,7 +364,9 @@ def start_keyboard() -> InlineKeyboardMarkup:
 
 
 router.message(CommandStart())(handle_start)
+router.message(Command("help"))(handle_start)
 router.message(Command("chatid"))(handle_chat_id)
 router.message(Command("myid"))(handle_my_id)
 router.message(Command("stats"))(handle_stats)
 router.message(Command("fileid"))(handle_file_id)
+router.message(F.chat.type == "private")(handle_private_fallback)

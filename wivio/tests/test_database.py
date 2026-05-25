@@ -100,6 +100,19 @@ async def test_user_repository_tracks_users_and_stats(tmp_path: Path) -> None:
             status="error",
             error="failed",
         )
+        await events.add(
+            "https://instagram.com/reel/old",
+            user_id=42,
+            platform="instagram",
+            status="restricted",
+            error="restricted",
+        )
+        await database.connection.execute(
+            "UPDATE download_events SET created_at = datetime('now', '-2 days') "
+            "WHERE normalized_url = ?",
+            ("https://instagram.com/reel/old",),
+        )
+        await database.connection.commit()
 
         stats = await users.stats()
 
@@ -112,6 +125,7 @@ async def test_user_repository_tracks_users_and_stats(tmp_path: Path) -> None:
         assert stats.failed_requests == 1
         assert stats.cached_videos == 1
         assert stats.errors_24h == 1
+        assert stats.errors_7d == 2
     finally:
         await database.close()
 
