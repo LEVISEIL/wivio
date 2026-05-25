@@ -1,14 +1,40 @@
+import pytest
+
 from bot.database.models import UserStats
 from bot.handlers.start import (
     chat_id_message,
+    handle_private_fallback,
     my_id_message,
+    private_fallback_message,
     start_keyboard,
     start_message,
     stats_message,
+    usage_hint_message,
     video_file_id_message,
     welcome_file_id_message,
     welcome_forward_message_config,
 )
+
+
+class FakeUser:
+    id = 42
+
+
+class FakeChat:
+    id = 42
+
+
+class FakeMessage:
+    from_user = FakeUser()
+    chat = FakeChat()
+    text = "привет"
+    caption = None
+
+    def __init__(self) -> None:
+        self.answers: list[tuple[str, bool | None]] = []
+
+    async def answer(self, text: str, disable_web_page_preview: bool | None = None) -> None:
+        self.answers.append((text, disable_web_page_preview))
 
 
 def test_start_message_explains_inline_usage() -> None:
@@ -27,6 +53,42 @@ def test_start_keyboard_opens_inline_mode_in_current_chat() -> None:
 
     assert button.text == "Попробовать в этом чате"
     assert button.switch_inline_query_current_chat == ""
+
+
+def test_private_fallback_message_explains_how_to_send_video_link() -> None:
+    message = private_fallback_message(
+        "@wivio_bot",
+        "https://www.instagram.com/reel/abc/?igsh=test",
+    )
+
+    assert "открой нужный чат" in message
+    assert "<code>@wivio_bot https://www.instagram.com/reel/abc/?igsh=test</code>" in message
+    assert "нажми на него" in message
+    assert "inline" not in message.lower()
+
+
+def test_private_fallback_message_handles_plain_text() -> None:
+    message = private_fallback_message("@wivio_bot", "привет")
+
+    assert "Открой чат" in message
+    assert "<code>@wivio_bot</code>" in message
+    assert "Поддерживаются TikTok" in message
+    assert "inline" not in message.lower()
+
+
+def test_usage_hint_message_uses_clean_username() -> None:
+    assert "<code>@wivio_bot</code>" in usage_hint_message("wivio_bot")
+
+
+@pytest.mark.asyncio
+async def test_handle_private_fallback_answers_without_user_event_counter() -> None:
+    message = FakeMessage()
+
+    await handle_private_fallback(message, "@wivio_bot")
+
+    assert len(message.answers) == 1
+    assert "<code>@wivio_bot</code>" in message.answers[0][0]
+    assert message.answers[0][1] is True
 
 
 def test_chat_id_message_contains_chat_id() -> None:
@@ -55,12 +117,14 @@ def test_stats_message_contains_user_stats() -> None:
             failed_requests=5,
             cached_videos=40,
             errors_24h=1,
+            errors_7d=9,
         )
     )
 
     assert "Статистика Wivio" in message
     assert "Всего пользователей: <b>10</b>" in message
     assert "Ошибок загрузки за 24 часа: <b>1</b>" in message
+    assert "Ошибок загрузки за 7 дней: <b>9</b>" in message
 
 
 def test_video_file_id_message_contains_env_name() -> None:

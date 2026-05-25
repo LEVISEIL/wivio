@@ -5,6 +5,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 import aiofiles
@@ -68,14 +69,23 @@ class VideoDownloader:
         )
 
         try:
+            started_at = monotonic()
             info, video_path = await asyncio.to_thread(
                 self._download_sync,
                 parsed_url.original_url,
                 job_dir,
                 self._cookies_path_for(parsed_url),
             )
+            download_seconds = monotonic() - started_at
         except YtDlpDownloadError as exc:
             error = str(exc)
+            if _is_instagram_follow_required_error(error):
+                logger.warning(
+                    "Instagram follow-only video normalized_url=%s error=%s",
+                    parsed_url.normalized_url,
+                    exc,
+                )
+                raise RestrictedVideoError(error) from exc
             if _is_instagram_auth_required_error(error):
                 logger.error(
                     "Instagram cookies/login need attention: update cookies or wait for "
@@ -119,7 +129,9 @@ class VideoDownloader:
             )
 
         thumbnail_url = _clean_string(info.get("thumbnail"))
+        thumbnail_started_at = monotonic()
         thumbnail_path = await self._download_thumbnail(thumbnail_url, job_dir)
+        thumbnail_seconds = monotonic() - thumbnail_started_at
 
         title = _clean_string(info.get("title")) or f"{parsed_url.platform.value.title()} video"
         uploader = _clean_string(info.get("uploader") or info.get("channel"))
@@ -129,7 +141,15 @@ class VideoDownloader:
         if uploader:
             description = f"{description} by {uploader}"
 
-        logger.info("Downloaded %s to %s", parsed_url.normalized_url, video_path)
+        logger.info(
+            "Download completed normalized_url=%s path=%s size=%s "
+            "download_seconds=%.3f thumbnail_seconds=%.3f",
+            parsed_url.normalized_url,
+            video_path,
+            size,
+            download_seconds,
+            thumbnail_seconds,
+        )
         return DownloadedVideo(
             original_url=parsed_url.original_url,
             normalized_url=parsed_url.normalized_url,
@@ -284,6 +304,7 @@ def _is_restricted_instagram_error(error: str) -> bool:
     markers = (
         "this content isn't available to everyone",
         "it can't be seen by certain audiences",
+        "only available for registered users who follow this account",
         "instagram sent an empty media response",
         "check if this post is accessible in your browser without being logged-in",
         "login required",
@@ -295,8 +316,19 @@ def _is_restricted_instagram_error(error: str) -> bool:
     return "[instagram]" in text and any(marker in text for marker in markers)
 
 
+def _is_instagram_follow_required_error(error: str) -> bool:
+    text = error.lower()
+    markers = (
+        "only available for registered users who follow this account",
+        "follow this account",
+    )
+    return "[instagram]" in text and any(marker in text for marker in markers)
+
+
 def _is_instagram_auth_required_error(error: str) -> bool:
     text = error.lower()
+    if _is_instagram_follow_required_error(error):
+        return False
     markers = (
         "login required",
         "rate-limit reached",

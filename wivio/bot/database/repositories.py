@@ -234,10 +234,11 @@ class UserRepository:
 
             errors_cursor = await self.connection.execute(
                 """
-                SELECT COUNT(*) AS total
+                SELECT
+                    SUM(created_at >= datetime('now', '-1 day')) AS errors_24h,
+                    SUM(created_at >= datetime('now', '-7 days')) AS errors_7d
                 FROM download_events
-                WHERE status IN ('error', 'timeout')
-                  AND created_at >= datetime('now', '-1 day')
+                WHERE status IN ('error', 'timeout', 'restricted')
                 """
             )
             errors_row = await errors_cursor.fetchone()
@@ -252,7 +253,8 @@ class UserRepository:
                 successful_requests=_int_value(row["successful_requests"]),
                 failed_requests=_int_value(row["failed_requests"]),
                 cached_videos=_int_value(videos_row["total"]),
-                errors_24h=_int_value(errors_row["total"]),
+                errors_24h=_int_value(errors_row["errors_24h"]),
+                errors_7d=_int_value(errors_row["errors_7d"]),
             )
         except Exception:
             logger.exception("Could not build user stats")

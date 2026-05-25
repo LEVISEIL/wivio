@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from time import monotonic
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
@@ -47,10 +48,17 @@ class TelegramUploader:
             return message.video.file_id, message.video.file_unique_id
 
         try:
+            started_at = monotonic()
             file_id, file_unique_id = await retry_async(operation, attempts=self.retries)
+            upload_seconds = monotonic() - started_at
         except Exception as exc:
             logger.exception("Telegram upload failed normalized_url=%s", video.normalized_url)
             raise UploadError(str(exc)) from exc
 
-        logger.info("Uploaded %s to Telegram file_id=%s", video.normalized_url, file_id[:16])
+        logger.info(
+            "Uploaded video to Telegram normalized_url=%s file_id=%s upload_seconds=%.3f",
+            video.normalized_url,
+            file_id[:16],
+            upload_seconds,
+        )
         return file_id, file_unique_id

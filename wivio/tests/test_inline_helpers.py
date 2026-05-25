@@ -1,7 +1,15 @@
 import pytest
 
 from bot.database.models import CachedVideo
-from bot.handlers.inline import _failed_button, _loading_button, _wait_for_inline_ready
+from bot.handlers.inline import (
+    MAX_INLINE_CAPTION_LENGTH,
+    _brand_footer,
+    _cached_video_inline_result,
+    _caption_with_brand_footer,
+    _failed_button,
+    _loading_button,
+    _wait_for_inline_ready,
+)
 from bot.services.video_cache import FAILED_STATUS, RESTRICTED_STATUS, TIMEOUT_STATUS
 from bot.utils.urls import ParsedVideoUrl, Platform
 
@@ -47,6 +55,29 @@ def test_failed_button_explains_restricted_instagram_video() -> None:
 
     assert button.text == "Instagram ограничил доступ к этому видео"
     assert button.start_parameter == RESTRICTED_STATUS
+
+
+def test_cached_video_result_adds_brand_footer_to_caption() -> None:
+    result = _cached_video_inline_result(cached_video(), "Cached | Tiktok", "@wivio_bot")
+
+    assert "<b>Cached</b>" in result.caption
+    assert "@wivio_bot</a>" in result.caption
+    assert "https://t.me/wivio_bot" in result.caption
+
+
+def test_brand_footer_has_stable_variants() -> None:
+    first = _brand_footer("@wivio_bot", "https://example.com/video-1")
+    second = _brand_footer("@wivio_bot", "https://example.com/video-1")
+
+    assert first == second
+    assert "@wivio_bot</a>" in first
+
+
+def test_caption_with_brand_footer_respects_telegram_caption_limit() -> None:
+    caption = _caption_with_brand_footer("C" * 2000, "@wivio_bot", "key")
+
+    assert len(caption) == MAX_INLINE_CAPTION_LENGTH
+    assert "@wivio_bot</a>" in caption
 
 
 @pytest.mark.asyncio
