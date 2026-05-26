@@ -11,6 +11,7 @@ from aiogram.types import InlineQuery, InlineQueryResultsButton
 
 from bot.database.models import CachedVideo
 from bot.database.repositories import UserRepository
+from bot.services.downloader import build_caption
 from bot.services.errors import VideoBotError
 from bot.services.video_cache import (
     FAILED_STATUS,
@@ -31,6 +32,7 @@ BRAND_FOOTER_TEMPLATES = (
     '⚡️ Отправляйте видео прям в чат через <a href="https://t.me/{username}">@{username}</a>',
 )
 MAX_INLINE_CAPTION_LENGTH = 1024
+MAX_INLINE_READY_WAIT_SECONDS = 8
 
 
 class VideoInlineQueryHandler(InlineQueryHandler):
@@ -211,6 +213,7 @@ async def _wait_for_inline_ready(
     status: str,
     ready_wait_seconds: int,
 ) -> CachedVideo | None:
+    ready_wait_seconds = _inline_ready_wait_seconds(ready_wait_seconds)
     if ready_wait_seconds <= 0:
         return None
 
@@ -243,11 +246,19 @@ def _cached_video_inline_result(
         file_id=cached.telegram_file_id,
         title=cached.title,
         caption=_caption_with_brand_footer(
-            caption=cached.caption,
+            caption=_source_caption(cached),
             bot_username=bot_username,
             variant_key=caption_variant_key,
         ),
         description=description,
+    )
+
+
+def _source_caption(cached: CachedVideo) -> str:
+    return build_caption(
+        title="",
+        platform=cached.platform,
+        url=cached.original_url or cached.normalized_url,
     )
 
 
@@ -282,9 +293,13 @@ def _variant_index(value: str, size: int) -> int:
 
 def _loading_button() -> InlineQueryResultsButton:
     return InlineQueryResultsButton(
-        text="Видео обрабатывается. Обновите запрос через пару секунд",
+        text="Видео не успело загрузиться. Вставьте ссылку ещё раз",
         start_parameter="loading",
     )
+
+
+def _inline_ready_wait_seconds(configured_seconds: int) -> int:
+    return max(0, min(configured_seconds, MAX_INLINE_READY_WAIT_SECONDS))
 
 
 def _failed_button(status: str) -> InlineQueryResultsButton:
