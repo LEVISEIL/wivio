@@ -358,7 +358,17 @@ def start_keyboard() -> InlineKeyboardMarkup:
                     text="Попробовать в этом чате",
                     switch_inline_query_current_chat="",
                 )
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Наш канал",
+                    url="https://t.me/wivio_ch",
+                ),
+                InlineKeyboardButton(
+                    text="🆘 Поддержка",
+                    url="https://t.me/ttdarr",
+                ),
+            ],
         ]
     )
 

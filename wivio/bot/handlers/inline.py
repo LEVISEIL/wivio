@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 router = Router(name="inline")
 
 BRAND_FOOTER_TEMPLATES = (
-    'Рад был помочь! Ваш, <a href="https://t.me/{username}">@{username}</a>',
-    'Спасибо, что пользуетесь <a href="https://t.me/{username}">@{username}</a>',
-    'Видео готово. Сохраняйте и отправляйте через <a href="https://t.me/{username}">@{username}</a>',
+    '🤍 Спасибо, что пользуетесь <a href="https://t.me/{username}">@{username}</a>',
+    '🔥 Видео отправлено с помощью <a href="https://t.me/{username}">@{username}</a>',
+    '⚡️ Отправляйте видео прям в чат через <a href="https://t.me/{username}">@{username}</a>',
 )
 MAX_INLINE_CAPTION_LENGTH = 1024
 
@@ -191,8 +191,15 @@ class VideoInlineQueryHandler(InlineQueryHandler):
         await users.increment_success(inline_query.from_user.id)
         await _answer_inline(
             inline_query,
-            results=[_cached_video_inline_result(cached, description, bot_username)],
-            cache_time=cache_time,
+            results=[
+                _cached_video_inline_result(
+                    cached=cached,
+                    description=description,
+                    bot_username=bot_username,
+                    variant_key=inline_query.id,
+                )
+            ],
+            cache_time=min(cache_time, 1),
             is_personal=True,
         )
 
@@ -225,7 +232,9 @@ def _cached_video_inline_result(
     cached: CachedVideo,
     description: str,
     bot_username: str,
+    variant_key: str | None = None,
 ) -> Any:
+    caption_variant_key = f"{cached.normalized_url}:{variant_key or cached.normalized_url}"
     return cached_video_result(
         result_id=_result_id(
             cached.normalized_url,
@@ -236,7 +245,7 @@ def _cached_video_inline_result(
         caption=_caption_with_brand_footer(
             caption=cached.caption,
             bot_username=bot_username,
-            variant_key=cached.normalized_url,
+            variant_key=caption_variant_key,
         ),
         description=description,
     )

@@ -55,6 +55,16 @@ def test_start_keyboard_opens_inline_mode_in_current_chat() -> None:
     assert button.switch_inline_query_current_chat == ""
 
 
+def test_start_keyboard_contains_channel_and_support_links() -> None:
+    keyboard = start_keyboard()
+    channel_button, support_button = keyboard.inline_keyboard[1]
+
+    assert channel_button.text == "🔗 Наш канал"
+    assert channel_button.url == "https://t.me/wivio_ch"
+    assert support_button.text == "🆘 Поддержка"
+    assert support_button.url == "https://t.me/ttdarr"
+
+
 def test_private_fallback_message_explains_how_to_send_video_link() -> None:
     message = private_fallback_message(
         "@wivio_bot",

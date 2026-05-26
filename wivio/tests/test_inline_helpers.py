@@ -58,7 +58,12 @@ def test_failed_button_explains_restricted_instagram_video() -> None:
 
 
 def test_cached_video_result_adds_brand_footer_to_caption() -> None:
-    result = _cached_video_inline_result(cached_video(), "Cached | Tiktok", "@wivio_bot")
+    result = _cached_video_inline_result(
+        cached_video(),
+        "Cached | Tiktok",
+        "@wivio_bot",
+        variant_key="query-1",
+    )
 
     assert "<b>Cached</b>" in result.caption
     assert "@wivio_bot</a>" in result.caption
@@ -73,10 +78,11 @@ def test_brand_footer_has_stable_variants() -> None:
     assert "@wivio_bot</a>" in first
 
 
-def test_caption_with_brand_footer_respects_telegram_caption_limit() -> None:
+def test_caption_with_brand_footer_keeps_description_before_brand_text() -> None:
     caption = _caption_with_brand_footer("C" * 2000, "@wivio_bot", "key")
 
     assert len(caption) == MAX_INLINE_CAPTION_LENGTH
+    assert caption.startswith("C")
     assert "@wivio_bot</a>" in caption
 
 
