@@ -3,10 +3,12 @@ import pytest
 from bot.database.models import CachedVideo
 from bot.handlers.inline import (
     MAX_INLINE_CAPTION_LENGTH,
+    MAX_INLINE_READY_WAIT_SECONDS,
     _brand_footer,
     _cached_video_inline_result,
     _caption_with_brand_footer,
     _failed_button,
+    _inline_ready_wait_seconds,
     _loading_button,
     _wait_for_inline_ready,
 )
@@ -32,8 +34,14 @@ class FakeVideoCache:
 def test_loading_button_is_status_only_for_inline_results() -> None:
     button = _loading_button()
 
-    assert button.text == "Видео обрабатывается. Обновите запрос через пару секунд"
+    assert button.text == "Видео не успело загрузиться. Вставьте ссылку ещё раз"
     assert button.start_parameter == "loading"
+
+
+def test_inline_ready_wait_is_clamped_before_telegram_query_expires() -> None:
+    assert _inline_ready_wait_seconds(12) == MAX_INLINE_READY_WAIT_SECONDS
+    assert _inline_ready_wait_seconds(4) == 4
+    assert _inline_ready_wait_seconds(-1) == 0
 
 
 def test_failed_button_explains_download_failure() -> None:
@@ -65,7 +73,8 @@ def test_cached_video_result_adds_brand_footer_to_caption() -> None:
         variant_key="query-1",
     )
 
-    assert "<b>Cached</b>" in result.caption
+    assert "<b>Cached</b>" not in result.caption
+    assert 'Tiktok | <a href="https://vm.tiktok.com/ZNRnPAR4S/">source</a>' in result.caption
     assert "@wivio_bot</a>" in result.caption
     assert "https://t.me/wivio_bot" in result.caption
 
@@ -95,11 +104,11 @@ async def test_wait_for_inline_ready_returns_cached_video() -> None:
         parsed=parsed_url(),
         user_id=42,
         status="queued",
-        ready_wait_seconds=8,
+        ready_wait_seconds=12,
     )
 
     assert result == cached_video()
-    assert cache.calls == [(parsed_url(), 42, 8)]
+    assert cache.calls == [(parsed_url(), 42, MAX_INLINE_READY_WAIT_SECONDS)]
 
 
 @pytest.mark.asyncio

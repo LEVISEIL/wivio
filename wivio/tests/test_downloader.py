@@ -35,14 +35,14 @@ def test_html_escape_escapes_caption_sensitive_characters() -> None:
     assert html_escape('<b>"A&B"</b>') == "&lt;b&gt;&quot;A&amp;B&quot;&lt;/b&gt;"
 
 
-def test_build_caption_limits_title_and_escapes_url() -> None:
+def test_build_caption_uses_only_platform_and_source_url() -> None:
     caption = build_caption(
         title="<tag>" + ("x" * 400),
         platform="youtube_shorts",
         url='https://example.com?a="b"&c=<d>',
     )
 
-    assert caption.startswith("<b>&lt;tag&gt;")
+    assert "&lt;tag&gt;" not in caption
     assert "Youtube Shorts" in caption
     assert "&quot;b&quot;" in caption
     assert "&lt;d&gt;" in caption
@@ -150,7 +150,8 @@ async def test_download_builds_downloaded_video_from_yt_dlp_info(tmp_path: Path)
     assert downloaded.video_path == video_path
     assert downloaded.thumbnail_path == thumb_path
     assert downloaded.title == "A <title>"
-    assert downloaded.caption.startswith("<b>A &lt;title&gt;</b>")
+    assert downloaded.caption.startswith("Youtube Shorts | ")
+    assert "A &lt;title&gt;" not in downloaded.caption
     assert downloaded.duration == 12
     assert downloaded.width == 720
     assert downloaded.height == 1280
