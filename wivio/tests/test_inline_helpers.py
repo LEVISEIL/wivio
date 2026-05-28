@@ -9,6 +9,7 @@ from bot.handlers.inline import (
     _caption_with_brand_footer,
     _failed_button,
     _inline_ready_wait_seconds,
+    _invalid_link_result,
     _loading_button,
     _wait_for_inline_ready,
 )
@@ -44,10 +45,33 @@ def test_inline_ready_wait_is_clamped_before_telegram_query_expires() -> None:
     assert _inline_ready_wait_seconds(-1) == 0
 
 
+def test_invalid_link_result_explains_supported_links() -> None:
+    result = _invalid_link_result()
+
+    assert result.title == "Некорректная ссылка"
+    assert result.description == "Проверьте ссылку и вставьте её ещё раз"
+    assert "TikTok" in result.input_message_content.message_text
+    assert "после имени бота" in result.input_message_content.message_text
+
+
 def test_failed_button_explains_download_failure() -> None:
     button = _failed_button(FAILED_STATUS)
 
-    assert button.text == "Не удалось скачать. Возможно, нужен вход в Instagram"
+    assert button.text == "Не удалось скачать видео. Проверьте ссылку и попробуйте ещё раз"
+    assert button.start_parameter == FAILED_STATUS
+
+
+def test_failed_button_explains_tiktok_download_failure() -> None:
+    button = _failed_button(FAILED_STATUS, Platform.TIKTOK)
+
+    assert button.text == "Не удалось скачать TikTok. Проверьте ссылку и попробуйте ещё раз"
+    assert button.start_parameter == FAILED_STATUS
+
+
+def test_failed_button_explains_instagram_download_failure() -> None:
+    button = _failed_button(FAILED_STATUS, Platform.INSTAGRAM)
+
+    assert button.text == "Не удалось скачать Instagram. Проверьте ссылку или доступ к видео"
     assert button.start_parameter == FAILED_STATUS
 
 

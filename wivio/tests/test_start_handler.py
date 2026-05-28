@@ -86,6 +86,14 @@ def test_private_fallback_message_handles_plain_text() -> None:
     assert "inline" not in message.lower()
 
 
+def test_private_fallback_message_handles_invalid_link() -> None:
+    message = private_fallback_message("@wivio_bot", "https://example.com/video")
+
+    assert "Некорректная ссылка" in message
+    assert "TikTok" in message
+    assert "<code>@wivio_bot ссылка</code>" in message
+
+
 def test_usage_hint_message_uses_clean_username() -> None:
     assert "<code>@wivio_bot</code>" in usage_hint_message("wivio_bot")
 
