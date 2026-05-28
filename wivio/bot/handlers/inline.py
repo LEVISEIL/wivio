@@ -20,7 +20,7 @@ from bot.services.video_cache import (
     VideoCacheService,
 )
 from bot.utils.inline_results import article_result, cached_video_result
-from bot.utils.urls import ParsedVideoUrl, UnsupportedUrlError, parse_video_url
+from bot.utils.urls import ParsedVideoUrl, Platform, UnsupportedUrlError, parse_video_url
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +74,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
             )
             await _answer_inline(
                 inline_query,
-                results=[
-                    article_result(
-                        "unsupported",
-                        "Unsupported link",
-                        str(exc),
-                        "Send a TikTok, Instagram Reels, or YouTube Shorts link",
-                    )
-                ],
+                results=[_invalid_link_result()],
                 cache_time=1,
                 is_personal=True,
             )
@@ -138,7 +131,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                     results=[],
                     cache_time=0,
                     is_personal=True,
-                    button=_failed_button(status),
+                    button=_failed_button(status, parsed.platform),
                 )
                 return
 
@@ -170,7 +163,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                         results=[],
                         cache_time=0,
                         is_personal=True,
-                        button=_failed_button(status),
+                        button=_failed_button(status, parsed.platform),
                     )
                     return
 
@@ -298,17 +291,41 @@ def _loading_button() -> InlineQueryResultsButton:
     )
 
 
+def _invalid_link_result() -> Any:
+    return article_result(
+        "invalid-link",
+        "Некорректная ссылка",
+        _invalid_link_message(),
+        "Проверьте ссылку и вставьте её ещё раз",
+    )
+
+
+def _invalid_link_message() -> str:
+    return (
+        "<b>Некорректная ссылка.</b>\n\n"
+        "Проверь, что ссылка открывается и ведёт на видео из TikTok, "
+        "Instagram Reels или YouTube Shorts.\n\n"
+        "Скопируй ссылку ещё раз и вставь её после имени бота."
+    )
+
+
 def _inline_ready_wait_seconds(configured_seconds: int) -> int:
     return max(0, min(configured_seconds, MAX_INLINE_READY_WAIT_SECONDS))
 
 
-def _failed_button(status: str) -> InlineQueryResultsButton:
+def _failed_button(status: str, platform: Platform | str | None = None) -> InlineQueryResultsButton:
     if status == TIMEOUT_STATUS:
         text = "Видео обрабатывалось слишком долго. Попробуйте ещё раз"
     elif status == RESTRICTED_STATUS:
         text = "Instagram ограничил доступ к этому видео"
+    elif platform == Platform.INSTAGRAM or platform == Platform.INSTAGRAM.value:
+        text = "Не удалось скачать Instagram. Проверьте ссылку или доступ к видео"
+    elif platform == Platform.TIKTOK or platform == Platform.TIKTOK.value:
+        text = "Не удалось скачать TikTok. Проверьте ссылку и попробуйте ещё раз"
+    elif platform == Platform.YOUTUBE_SHORTS or platform == Platform.YOUTUBE_SHORTS.value:
+        text = "Не удалось скачать Shorts. Проверьте ссылку и попробуйте ещё раз"
     else:
-        text = "Не удалось скачать. Возможно, нужен вход в Instagram"
+        text = "Не удалось скачать видео. Проверьте ссылку и попробуйте ещё раз"
     return InlineQueryResultsButton(
         text=text,
         start_parameter=status,

@@ -11,7 +11,7 @@ from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarku
 
 from bot.database.models import UserStats
 from bot.database.repositories import UserRepository
-from bot.utils.urls import UnsupportedUrlError, parse_video_url
+from bot.utils.urls import UnsupportedUrlError, extract_first_url, parse_video_url
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +281,8 @@ def private_fallback_message(bot_username: str, text: str) -> str:
     try:
         parsed = parse_video_url(text)
     except UnsupportedUrlError:
+        if extract_first_url(text):
+            return invalid_link_message(username)
         return usage_hint_message(username)
 
     return (
@@ -297,6 +299,16 @@ def usage_hint_message(username: str) -> str:
         f"2. Напиши <code>@{username}</code> и вставь ссылку на видео.\n"
         "3. Дождись, когда появится видео, и нажми на него.\n\n"
         "Поддерживаются TikTok, Instagram Reels и YouTube Shorts."
+    )
+
+
+def invalid_link_message(username: str) -> str:
+    return (
+        "<b>Некорректная ссылка.</b>\n\n"
+        "Проверь, что ссылка открывается и ведёт на видео из TikTok, "
+        "Instagram Reels или YouTube Shorts.\n\n"
+        "Чтобы отправить видео, напиши в нужном чате:\n"
+        f"<code>@{username} ссылка</code>"
     )
 
 
