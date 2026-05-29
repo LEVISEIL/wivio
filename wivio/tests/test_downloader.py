@@ -480,7 +480,10 @@ def test_download_sync_builds_instagram_slideshow_from_graphql_when_entries_are_
     monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
     monkeypatch.setattr(
         "bot.services.downloader._fetch_instagram_graphql_image_urls",
-        lambda url: ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"],
+        lambda url, cookies_path=None: [
+            "https://cdn.example/one.jpg",
+            "https://cdn.example/two.jpg",
+        ],
     )
     monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
     monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
@@ -530,7 +533,10 @@ def test_download_sync_builds_instagram_slideshow_when_yt_dlp_has_no_video_forma
     monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
     monkeypatch.setattr(
         "bot.services.downloader._fetch_instagram_graphql_image_urls",
-        lambda url: ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"],
+        lambda url, cookies_path=None: [
+            "https://cdn.example/one.jpg",
+            "https://cdn.example/two.jpg",
+        ],
     )
     monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
     monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
@@ -540,6 +546,44 @@ def test_download_sync_builds_instagram_slideshow_when_yt_dlp_has_no_video_forma
     assert info["title"] == "Instagram photo post"
     assert set(downloaded_urls) == {"https://cdn.example/one.jpg", "https://cdn.example/two.jpg"}
     assert video_path == job_dir / "instagram-photo-slideshow.mp4"
+
+
+def test_instagram_graphql_uses_cookiefile_headers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import _fetch_instagram_graphql_image_urls
+
+    cookies_path = tmp_path / "instagram-cookies.txt"
+    cookies_path.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".instagram.com\tTRUE\t/\tTRUE\t0\tcsrftoken\tcsrf-value\n"
+        ".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tsession-value\n",
+        encoding="utf-8",
+    )
+    captured_headers: dict[str, str] = {}
+
+    def fake_read_url(request, url: str, label: str, verify_cert: bool = True) -> bytes:
+        captured_headers.update(dict(request.header_items()))
+        return (
+            b'{"data":{"xdt_shortcode_media":{"edge_sidecar_to_children":{"edges":['
+            b'{"node":{"is_video":false,"display_resources":['
+            b'{"src":"https://cdn.example/one.jpg","config_width":100,'
+            b'"config_height":100}]}}]}}}}'
+        )
+
+    monkeypatch.setattr("bot.services.downloader._read_url", fake_read_url)
+
+    image_urls = _fetch_instagram_graphql_image_urls(
+        "https://www.instagram.com/p/abc/",
+        cookies_path,
+    )
+
+    headers = {key.lower(): value for key, value in captured_headers.items()}
+    assert "csrftoken=csrf-value" in headers["cookie"]
+    assert "sessionid=session-value" in headers["cookie"]
+    assert headers["x-csrftoken"] == "csrf-value"
+    assert image_urls == ["https://cdn.example/one.jpg"]
 
 
 def test_instagram_metadata_image_download_keeps_successful_images(
