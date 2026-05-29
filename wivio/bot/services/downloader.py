@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".opus", ".ogg", ".wav"}
-INSTAGRAM_PHOTO_SECONDS = 3
+INSTAGRAM_PHOTO_SECONDS = 2
+INSTAGRAM_SLIDESHOW_FPS = 15
+INSTAGRAM_SLIDESHOW_MAX_WIDTH = 900
+INSTAGRAM_FFMPEG_PRESET = "veryfast"
 INSTAGRAM_IMAGE_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -214,8 +217,14 @@ class VideoDownloader:
             options["cookiefile"] = str(temporary_cookies_path)
 
         try:
+            extract_started_at = monotonic()
             with YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=True)
+            logger.info(
+                "yt-dlp extract_info completed url=%s extract_seconds=%.3f",
+                url,
+                monotonic() - extract_started_at,
+            )
         except Exception as exc:
             error = str(exc)
             if _is_restricted_instagram_error(error):
@@ -227,13 +236,17 @@ class VideoDownloader:
                 )
                 raise
             if _is_instagram_no_video_formats_error(error) and _is_instagram_url(url):
+                metadata_started_at = monotonic()
                 image_urls = _fetch_instagram_graphql_image_urls(url)
+                metadata_seconds = monotonic() - metadata_started_at
                 if image_urls:
                     logger.info(
                         "yt-dlp found Instagram photo post without video formats; "
-                        "downloading images from metadata url=%s images=%s",
+                        "downloading images from metadata url=%s images=%s "
+                        "metadata_seconds=%.3f",
                         url,
                         len(image_urls),
+                        metadata_seconds,
                     )
                     info = _instagram_fallback_info(url)
                     video_path = _build_instagram_slideshow_from_image_urls(
@@ -245,9 +258,10 @@ class VideoDownloader:
                     return info, video_path
                 logger.warning(
                     "yt-dlp found Instagram photo post without video formats, but no images "
-                    "were found url=%s job_dir=%s error=%s",
+                    "were found url=%s job_dir=%s metadata_seconds=%.3f error=%s",
                     url,
                     job_dir,
+                    metadata_seconds,
                     exc,
                 )
             logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
@@ -274,7 +288,15 @@ class VideoDownloader:
         if not image_candidates and _is_instagram_url(url):
             image_urls = _extract_instagram_image_urls(info)
             if not image_urls:
+                metadata_started_at = monotonic()
                 image_urls = _fetch_instagram_graphql_image_urls(url)
+                logger.info(
+                    "Instagram GraphQL image metadata fetched url=%s images=%s "
+                    "metadata_seconds=%.3f",
+                    url,
+                    len(image_urls),
+                    monotonic() - metadata_started_at,
+                )
             if image_urls:
                 logger.info(
                     "yt-dlp produced no Instagram media files; downloading images from metadata "
@@ -293,16 +315,19 @@ class VideoDownloader:
                 path for path in candidates if path.suffix.lower() in AUDIO_EXTENSIONS
             ]
             audio_path = max(audio_candidates, key=lambda path: path.stat().st_size, default=None)
+            slideshow_started_at = monotonic()
             video_path = _build_instagram_photo_slideshow(
                 job_dir=job_dir,
                 image_paths=image_candidates,
                 audio_path=audio_path,
             )
             logger.info(
-                "Built Instagram photo slideshow url=%s images=%s audio=%s path=%s",
+                "Instagram photo slideshow completed url=%s images=%s audio=%s "
+                "slideshow_seconds=%.3f path=%s",
                 url,
                 len(image_candidates),
                 bool(audio_path),
+                monotonic() - slideshow_started_at,
                 video_path,
             )
             return info, video_path
@@ -582,6 +607,10 @@ def _download_instagram_images_from_metadata(
     image_urls: list[str],
     info: dict,
 ) -> list[Path]:
+    if not image_urls:
+        raise DownloadError("Instagram photo post did not contain image URLs")
+
+    started_at = monotonic()
     headers = _instagram_image_headers(info)
     items: list[tuple[str, Path]] = []
     for index, url in enumerate(image_urls, start=1):
@@ -590,6 +619,7 @@ def _download_instagram_images_from_metadata(
 
     max_workers = min(2, len(items))
     image_paths: list[Path] = []
+    failed_count = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             (url, image_path, executor.submit(_download_url_to_path, url, image_path, headers))
@@ -602,11 +632,25 @@ def _download_instagram_images_from_metadata(
                 logger.warning(
                     "Could not download Instagram carousel image url=%s error=%s", url, exc
                 )
+                failed_count += 1
                 continue
             image_paths.append(image_path)
 
     if not image_paths:
         raise DownloadError("Could not download any Instagram carousel images")
+
+    downloaded_bytes = sum(path.stat().st_size for path in image_paths if path.exists())
+    logger.info(
+        "Instagram carousel images downloaded job_dir=%s requested=%s succeeded=%s failed=%s "
+        "workers=%s bytes=%s image_download_seconds=%.3f",
+        job_dir,
+        len(items),
+        len(image_paths),
+        failed_count,
+        max_workers,
+        downloaded_bytes,
+        monotonic() - started_at,
+    )
     return image_paths
 
 
@@ -616,21 +660,30 @@ def _build_instagram_slideshow_from_image_urls(
     image_urls: list[str],
     info: dict,
 ) -> Path:
+    started_at = monotonic()
+    image_download_started_at = monotonic()
     image_paths = _download_instagram_images_from_metadata(
         job_dir=job_dir,
         image_urls=image_urls,
         info=info,
     )
+    image_download_seconds = monotonic() - image_download_started_at
+    slideshow_started_at = monotonic()
     video_path = _build_instagram_photo_slideshow(
         job_dir=job_dir,
         image_paths=image_paths,
         audio_path=None,
     )
+    slideshow_seconds = monotonic() - slideshow_started_at
     logger.info(
-        "Built Instagram photo slideshow url=%s images=%s audio=%s path=%s",
+        "Instagram photo fallback timings url=%s images=%s audio=%s "
+        "image_download_seconds=%.3f slideshow_seconds=%.3f total_seconds=%.3f path=%s",
         url,
         len(image_paths),
         False,
+        image_download_seconds,
+        slideshow_seconds,
+        monotonic() - started_at,
         video_path,
     )
     return video_path
@@ -729,13 +782,15 @@ def _build_instagram_photo_slideshow(
     cmd.extend(
         [
             "-vf",
-            "scale='min(1080,iw)':-2,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            f"scale='min({INSTAGRAM_SLIDESHOW_MAX_WIDTH},iw)':-2,pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-r",
-            "30",
+            str(INSTAGRAM_SLIDESHOW_FPS),
             "-pix_fmt",
             "yuv420p",
             "-c:v",
             "libx264",
+            "-preset",
+            INSTAGRAM_FFMPEG_PRESET,
             "-movflags",
             "+faststart",
         ]
@@ -745,7 +800,9 @@ def _build_instagram_photo_slideshow(
     cmd.append(str(video_path.resolve()))
 
     try:
+        ffmpeg_started_at = monotonic()
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+        ffmpeg_seconds = monotonic() - ffmpeg_started_at
     except FileNotFoundError as exc:
         raise DownloadError("ffmpeg is not installed") from exc
     except subprocess.CalledProcessError as exc:
@@ -756,6 +813,20 @@ def _build_instagram_photo_slideshow(
 
     if not video_path.exists():
         raise DownloadError("ffmpeg did not produce Instagram photo slideshow")
+    logger.info(
+        "ffmpeg built Instagram slideshow job_dir=%s images=%s audio=%s fps=%s "
+        "photo_seconds=%s max_width=%s preset=%s size=%s ffmpeg_seconds=%.3f path=%s",
+        job_dir,
+        len(image_paths),
+        bool(audio_path),
+        INSTAGRAM_SLIDESHOW_FPS,
+        INSTAGRAM_PHOTO_SECONDS,
+        INSTAGRAM_SLIDESHOW_MAX_WIDTH,
+        INSTAGRAM_FFMPEG_PRESET,
+        video_path.stat().st_size,
+        ffmpeg_seconds,
+        video_path,
+    )
     return video_path
 
 
