@@ -323,6 +323,7 @@ def test_download_sync_builds_slideshow_for_instagram_photo_post(
     concat_text = (job_dir / "instagram-photo-slideshow.txt").read_text()
     assert "Instagram-abc-01.jpg" in concat_text
     assert "Instagram-abc-02.jpg" in concat_text
+    assert "duration 2" in concat_text
 
 
 def test_instagram_slideshow_uses_absolute_paths_for_ffmpeg(
@@ -360,6 +361,9 @@ def test_instagram_slideshow_uses_absolute_paths_for_ffmpeg(
     concat_path = job_dir / "instagram-photo-slideshow.txt"
     assert str(image_path.resolve()) in concat_path.read_text()
     assert captured_cmd[captured_cmd.index("-i") + 1] == str(concat_path.resolve())
+    assert "min(900,iw)" in captured_cmd[captured_cmd.index("-vf") + 1]
+    assert captured_cmd[captured_cmd.index("-r") + 1] == "15"
+    assert captured_cmd[captured_cmd.index("-preset") + 1] == "veryfast"
     assert captured_cmd[-1] == str((job_dir / "instagram-photo-slideshow.mp4").resolve())
 
 
