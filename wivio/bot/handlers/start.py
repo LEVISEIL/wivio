@@ -266,9 +266,7 @@ def start_message(bot_username: str) -> str:
     username = bot_username.lstrip("@")
     return (
         "<b>Привет! Я Wivio.</b>\n\n"
-        "Я помогаю отправлять видео из TikTok, Instagram Reels,\n\n"
-        "посты с фото из Instagram\n\n"
-        "и YouTube Shorts прямо через inline-режим Telegram.\n\n"
+        "Я помогаю отправлять видео из TikTok, Instagram Reels и YouTube Shorts прямо в чат с твоими друзьями без лишних действий.\n\n"
         "<b>Как пользоваться:</b>\n"
         "1. Открой любой чат.\n"
         f"2. Напиши <code>@{username}</code> и вставь ссылку на видео.\n"
