@@ -237,7 +237,7 @@ class VideoDownloader:
                 raise
             if _is_instagram_no_video_formats_error(error) and _is_instagram_url(url):
                 metadata_started_at = monotonic()
-                image_urls = _fetch_instagram_graphql_image_urls(url)
+                image_urls = _fetch_instagram_graphql_image_urls(url, temporary_cookies_path)
                 metadata_seconds = monotonic() - metadata_started_at
                 if image_urls:
                     logger.info(
@@ -254,6 +254,7 @@ class VideoDownloader:
                         job_dir=job_dir,
                         image_urls=image_urls,
                         info=info,
+                        cookies_path=temporary_cookies_path,
                     )
                     return info, video_path
                 logger.warning(
@@ -289,7 +290,7 @@ class VideoDownloader:
             image_urls = _extract_instagram_image_urls(info)
             if not image_urls:
                 metadata_started_at = monotonic()
-                image_urls = _fetch_instagram_graphql_image_urls(url)
+                image_urls = _fetch_instagram_graphql_image_urls(url, temporary_cookies_path)
                 logger.info(
                     "Instagram GraphQL image metadata fetched url=%s images=%s "
                     "metadata_seconds=%.3f",
@@ -308,6 +309,7 @@ class VideoDownloader:
                     job_dir=job_dir,
                     image_urls=image_urls,
                     info=info,
+                    cookies_path=temporary_cookies_path,
                 )
 
         if image_candidates and _is_instagram_url(url):
@@ -479,7 +481,10 @@ def _extract_instagram_image_urls(info: dict) -> list[str]:
     return urls
 
 
-def _fetch_instagram_graphql_image_urls(url: str) -> list[str]:
+def _fetch_instagram_graphql_image_urls(
+    url: str,
+    cookies_path: Path | None = None,
+) -> list[str]:
     shortcode = _instagram_shortcode_from_url(url)
     if not shortcode:
         return []
@@ -498,18 +503,20 @@ def _fetch_instagram_graphql_image_urls(url: str) -> list[str]:
         }
     )
     graphql_url = f"https://www.instagram.com/graphql/query/?{query}"
+    headers = {
+        "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
+        "X-IG-App-ID": "936619743392459",
+        "X-ASBD-ID": "198387",
+        "X-IG-WWW-Claim": "0",
+        "Origin": "https://www.instagram.com",
+        "Accept": "*/*",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": url,
+    }
+    headers.update(_instagram_cookie_headers(cookies_path))
     request = Request(
         graphql_url,
-        headers={
-            "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
-            "X-IG-App-ID": "936619743392459",
-            "X-ASBD-ID": "198387",
-            "X-IG-WWW-Claim": "0",
-            "Origin": "https://www.instagram.com",
-            "Accept": "*/*",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": url,
-        },
+        headers=headers,
     )
     try:
         content = _read_url(
@@ -606,12 +613,13 @@ def _download_instagram_images_from_metadata(
     job_dir: Path,
     image_urls: list[str],
     info: dict,
+    cookies_path: Path | None = None,
 ) -> list[Path]:
     if not image_urls:
         raise DownloadError("Instagram photo post did not contain image URLs")
 
     started_at = monotonic()
-    headers = _instagram_image_headers(info)
+    headers = _instagram_image_headers(info, cookies_path)
     items: list[tuple[str, Path]] = []
     for index, url in enumerate(image_urls, start=1):
         image_path = job_dir / f"instagram-photo-{index:03d}{_image_suffix_from_url(url)}"
@@ -659,6 +667,7 @@ def _build_instagram_slideshow_from_image_urls(
     job_dir: Path,
     image_urls: list[str],
     info: dict,
+    cookies_path: Path | None = None,
 ) -> Path:
     started_at = monotonic()
     image_download_started_at = monotonic()
@@ -666,6 +675,7 @@ def _build_instagram_slideshow_from_image_urls(
         job_dir=job_dir,
         image_urls=image_urls,
         info=info,
+        cookies_path=cookies_path,
     )
     image_download_seconds = monotonic() - image_download_started_at
     slideshow_started_at = monotonic()
@@ -689,7 +699,10 @@ def _build_instagram_slideshow_from_image_urls(
     return video_path
 
 
-def _instagram_image_headers(info: dict) -> dict[str, str]:
+def _instagram_image_headers(
+    info: dict,
+    cookies_path: Path | None = None,
+) -> dict[str, str]:
     headers = {
         "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
         "Referer": "https://www.instagram.com/",
@@ -699,7 +712,76 @@ def _instagram_image_headers(info: dict) -> dict[str, str]:
         headers.update(
             {str(key): str(value) for key, value in info_headers.items() if value is not None}
         )
+    headers.update(_instagram_cookie_headers(cookies_path))
     return headers
+
+
+def _instagram_cookie_headers(cookies_path: Path | None) -> dict[str, str]:
+    cookie_header = _cookie_header_from_file(cookies_path)
+    if not cookie_header:
+        return {}
+
+    headers = {"Cookie": cookie_header}
+    csrf_token = _cookie_value(cookie_header, "csrftoken")
+    if csrf_token:
+        headers["X-CSRFToken"] = csrf_token
+    return headers
+
+
+def _cookie_header_from_file(cookies_path: Path | None) -> str | None:
+    if cookies_path is None:
+        return None
+
+    try:
+        lines = cookies_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        logger.warning("Could not read Instagram cookies file path=%s error=%s", cookies_path, exc)
+        return None
+
+    cookies: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line.removeprefix("#HttpOnly_")
+        elif line.startswith("#"):
+            continue
+
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            domain = parts[0].lstrip(".").lower()
+            if not domain.endswith("instagram.com"):
+                continue
+            name = parts[5].strip()
+            value = parts[6].strip()
+            if name and value:
+                cookies[name] = value
+            continue
+
+        for item in line.split(";"):
+            if "=" not in item:
+                continue
+            name, value = item.strip().split("=", 1)
+            if name and value:
+                cookies[name] = value
+
+    if not cookies:
+        logger.warning(
+            "Instagram cookies file did not contain usable cookies path=%s",
+            cookies_path,
+        )
+        return None
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
+
+
+def _cookie_value(cookie_header: str, name: str) -> str | None:
+    prefix = f"{name}="
+    for item in cookie_header.split(";"):
+        text = item.strip()
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return None
 
 
 def _image_suffix_from_url(url: str) -> str:
