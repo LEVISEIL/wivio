@@ -217,7 +217,8 @@ class VideoDownloader:
             with YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=True)
         except Exception as exc:
-            if _is_restricted_instagram_error(str(exc)):
+            error = str(exc)
+            if _is_restricted_instagram_error(error):
                 logger.warning(
                     "yt-dlp found restricted Instagram video url=%s job_dir=%s error=%s",
                     url,
@@ -225,6 +226,30 @@ class VideoDownloader:
                     exc,
                 )
                 raise
+            if _is_instagram_no_video_formats_error(error) and _is_instagram_url(url):
+                image_urls = _fetch_instagram_graphql_image_urls(url)
+                if image_urls:
+                    logger.info(
+                        "yt-dlp found Instagram photo post without video formats; "
+                        "downloading images from metadata url=%s images=%s",
+                        url,
+                        len(image_urls),
+                    )
+                    info = _instagram_fallback_info(url)
+                    video_path = _build_instagram_slideshow_from_image_urls(
+                        url=url,
+                        job_dir=job_dir,
+                        image_urls=image_urls,
+                        info=info,
+                    )
+                    return info, video_path
+                logger.warning(
+                    "yt-dlp found Instagram photo post without video formats, but no images "
+                    "were found url=%s job_dir=%s error=%s",
+                    url,
+                    job_dir,
+                    exc,
+                )
             logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
             raise
 
@@ -352,6 +377,14 @@ def _copy_cookiefile(cookies_path: Path, job_dir: Path) -> Path:
 
 def _is_instagram_url(url: str) -> bool:
     return "instagram.com" in url.lower() or "instagr.am" in url.lower()
+
+
+def _instagram_fallback_info(url: str) -> dict:
+    return {
+        "title": "Instagram photo post",
+        "webpage_url": url,
+        "http_headers": {"Referer": "https://www.instagram.com/"},
+    }
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:
@@ -577,6 +610,32 @@ def _download_instagram_images_from_metadata(
     return image_paths
 
 
+def _build_instagram_slideshow_from_image_urls(
+    url: str,
+    job_dir: Path,
+    image_urls: list[str],
+    info: dict,
+) -> Path:
+    image_paths = _download_instagram_images_from_metadata(
+        job_dir=job_dir,
+        image_urls=image_urls,
+        info=info,
+    )
+    video_path = _build_instagram_photo_slideshow(
+        job_dir=job_dir,
+        image_paths=image_paths,
+        audio_path=None,
+    )
+    logger.info(
+        "Built Instagram photo slideshow url=%s images=%s audio=%s path=%s",
+        url,
+        len(image_paths),
+        False,
+        video_path,
+    )
+    return video_path
+
+
 def _instagram_image_headers(info: dict) -> dict[str, str]:
     headers = {
         "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
@@ -737,6 +796,11 @@ def _is_restricted_instagram_error(error: str) -> bool:
         "private",
     )
     return "[instagram]" in text and any(marker in text for marker in markers)
+
+
+def _is_instagram_no_video_formats_error(error: str) -> bool:
+    text = error.lower()
+    return "[instagram]" in text and "no video formats found" in text
 
 
 def _is_instagram_follow_required_error(error: str) -> bool:

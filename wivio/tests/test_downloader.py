@@ -487,6 +487,57 @@ def test_download_sync_builds_instagram_slideshow_from_graphql_when_entries_are_
     assert video_path == job_dir / "instagram-photo-slideshow.mp4"
 
 
+def test_download_sync_builds_instagram_slideshow_when_yt_dlp_has_no_video_formats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    downloaded_urls: list[str] = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            raise YtDlpDownloadError("ERROR: [Instagram] abc: No video formats found!")
+
+    def fake_download_url_to_path(url: str, path: Path, headers: dict[str, str]) -> None:
+        downloaded_urls.append(url)
+        path.write_bytes(b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._fetch_instagram_graphql_image_urls",
+        lambda url: ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"],
+    )
+    monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    info, video_path = downloader._download_sync("https://www.instagram.com/p/abc/", job_dir)
+
+    assert info["title"] == "Instagram photo post"
+    assert set(downloaded_urls) == {"https://cdn.example/one.jpg", "https://cdn.example/two.jpg"}
+    assert video_path == job_dir / "instagram-photo-slideshow.mp4"
+
+
 def test_instagram_metadata_image_download_keeps_successful_images(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
