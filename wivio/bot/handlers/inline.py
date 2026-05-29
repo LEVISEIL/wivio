@@ -55,7 +55,7 @@ class VideoInlineQueryHandler(InlineQueryHandler):
                         "empty",
                         "Вставьте ссылку и дождитесь обработки видео",
                         "Если ссылка уже вставлена, подождите несколько секунд.",
-                        "Поддерживаются TikTok, Reels, Instagram posts и Shorts",
+                        "Поддерживаются TikTok, Reels, Instagram-посты и Shorts",
                     )
                 ],
                 cache_time=1,
@@ -304,7 +304,7 @@ def _invalid_link_message() -> str:
     return (
         "<b>Некорректная ссылка.</b>\n\n"
         "Проверь, что ссылка открывается и ведёт на видео из TikTok, "
-        "Instagram Reels или YouTube Shorts.\n\n"
+        "Instagram Reels, Instagram-пост или YouTube Shorts.\n\n"
         "Скопируй ссылку ещё раз и вставь её после имени бота."
     )
 

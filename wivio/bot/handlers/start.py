@@ -266,7 +266,8 @@ def start_message(bot_username: str) -> str:
     username = bot_username.lstrip("@")
     return (
         "<b>Привет! Я Wivio.</b>\n\n"
-        "Я помогаю отправлять видео из TikTok, Instagram Reels\n\n"
+        "Я помогаю отправлять видео из TikTok, Instagram Reels,\n\n"
+        "посты с фото из Instagram\n\n"
         "и YouTube Shorts прямо через inline-режим Telegram.\n\n"
         "<b>Как пользоваться:</b>\n"
         "1. Открой любой чат.\n"
@@ -298,7 +299,7 @@ def usage_hint_message(username: str) -> str:
         "1. Открой чат, куда хочешь его отправить.\n"
         f"2. Напиши <code>@{username}</code> и вставь ссылку на видео.\n"
         "3. Дождись, когда появится видео, и нажми на него.\n\n"
-        "Поддерживаются TikTok, Instagram Reels и YouTube Shorts."
+        "Поддерживаются TikTok, Instagram Reels, посты с фото и YouTube Shorts."
     )
 
 
@@ -306,7 +307,7 @@ def invalid_link_message(username: str) -> str:
     return (
         "<b>Некорректная ссылка.</b>\n\n"
         "Проверь, что ссылка открывается и ведёт на видео из TikTok, "
-        "Instagram Reels или YouTube Shorts.\n\n"
+        "Instagram Reels, Instagram-пост или YouTube Shorts.\n\n"
         "Чтобы отправить видео, напиши в нужном чате:\n"
         f"<code>@{username} ссылка</code>"
     )
