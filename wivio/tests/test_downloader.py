@@ -268,6 +268,255 @@ def test_download_sync_uses_temporary_cookiefile_copy(tmp_path: Path, monkeypatc
     assert Path(captured_cookiefile).read_text() == cookies_path.read_text()
 
 
+def test_download_sync_builds_slideshow_for_instagram_photo_post(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    captured_options: dict = {}
+    captured_cmd: list[str] = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            captured_options.update(options)
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert url == "https://www.instagram.com/p/abc/"
+            assert download is True
+            (job_dir / "Instagram-abc-01.jpg").write_bytes(b"image-1")
+            (job_dir / "Instagram-abc-02.jpg").write_bytes(b"image-2")
+            (job_dir / "Instagram-abc.m4a").write_bytes(b"audio")
+            return {"title": "Photo post"}
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        captured_cmd.extend(cmd)
+        assert check is True
+        assert capture_output is True
+        assert text is True
+        assert timeout == 120
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    info, video_path = downloader._download_sync("https://www.instagram.com/p/abc/", job_dir)
+
+    assert info == {"title": "Photo post"}
+    assert captured_options["noplaylist"] is False
+    assert "-shortest" in captured_cmd
+    assert video_path == job_dir / "instagram-photo-slideshow.mp4"
+    assert video_path.read_bytes() == b"video"
+    concat_text = (job_dir / "instagram-photo-slideshow.txt").read_text()
+    assert "Instagram-abc-01.jpg" in concat_text
+    assert "Instagram-abc-02.jpg" in concat_text
+
+
+def test_instagram_slideshow_uses_absolute_paths_for_ffmpeg(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import _build_instagram_photo_slideshow
+
+    relative_job_dir = Path("downloads/test-job")
+    job_dir = tmp_path / relative_job_dir
+    job_dir.mkdir(parents=True)
+    image_path = job_dir / "instagram-photo-001.jpg"
+    image_path.write_bytes(b"image")
+    captured_cmd: list[str] = []
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        captured_cmd.extend(cmd)
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    _build_instagram_photo_slideshow(
+        job_dir=relative_job_dir,
+        image_paths=[relative_job_dir / image_path.name],
+        audio_path=None,
+    )
+
+    concat_path = job_dir / "instagram-photo-slideshow.txt"
+    assert str(image_path.resolve()) in concat_path.read_text()
+    assert captured_cmd[captured_cmd.index("-i") + 1] == str(concat_path.resolve())
+    assert captured_cmd[-1] == str((job_dir / "instagram-photo-slideshow.mp4").resolve())
+
+
+def test_download_sync_builds_instagram_slideshow_from_metadata_thumbnails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    downloaded_urls: list[str] = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            return {
+                "_type": "playlist",
+                "entries": [
+                    {
+                        "thumbnails": [
+                            {
+                                "url": "https://cdn.example/one-small.jpg",
+                                "width": 100,
+                                "height": 100,
+                            },
+                            {
+                                "url": "https://cdn.example/one-large.jpg",
+                                "width": 800,
+                                "height": 800,
+                            },
+                        ]
+                    },
+                    {
+                        "thumbnails": [
+                            {"url": "https://cdn.example/two.jpg", "width": 800, "height": 800}
+                        ]
+                    },
+                ],
+                "http_headers": {"Referer": "https://www.instagram.com/"},
+            }
+
+    def fake_download_url_to_path(url: str, path: Path, headers: dict[str, str]) -> None:
+        downloaded_urls.append(url)
+        assert headers["Referer"] == "https://www.instagram.com/"
+        path.write_bytes(b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    _info, video_path = downloader._download_sync("https://www.instagram.com/p/abc/", job_dir)
+
+    assert downloaded_urls == [
+        "https://cdn.example/one-large.jpg",
+        "https://cdn.example/two.jpg",
+    ]
+    assert video_path == job_dir / "instagram-photo-slideshow.mp4"
+
+
+def test_download_sync_builds_instagram_slideshow_from_graphql_when_entries_are_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    downloaded_urls: list[str] = []
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            return {"_type": "playlist", "entries": []}
+
+    def fake_download_url_to_path(url: str, path: Path, headers: dict[str, str]) -> None:
+        downloaded_urls.append(url)
+        path.write_bytes(b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._fetch_instagram_graphql_image_urls",
+        lambda url: ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"],
+    )
+    monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    _info, video_path = downloader._download_sync("https://www.instagram.com/p/abc/", job_dir)
+
+    assert downloaded_urls == ["https://cdn.example/one.jpg", "https://cdn.example/two.jpg"]
+    assert video_path == job_dir / "instagram-photo-slideshow.mp4"
+
+
+def test_instagram_metadata_image_download_keeps_successful_images(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import _download_instagram_images_from_metadata
+    from bot.services.errors import DownloadError
+
+    def fake_download_url_to_path(url: str, path: Path, headers: dict[str, str]) -> None:
+        if "broken" in url:
+            raise DownloadError("network timeout")
+        path.write_bytes(b"image")
+
+    monkeypatch.setattr("bot.services.downloader._download_url_to_path", fake_download_url_to_path)
+
+    image_paths = _download_instagram_images_from_metadata(
+        tmp_path,
+        [
+            "https://cdn.example/one.jpg",
+            "https://cdn.example/broken.jpg",
+            "https://cdn.example/two.jpg",
+        ],
+        {},
+    )
+
+    assert [path.name for path in image_paths] == [
+        "instagram-photo-001.jpg",
+        "instagram-photo-003.jpg",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_download_logs_alertable_error_for_instagram_auth_failure(
     tmp_path: Path,

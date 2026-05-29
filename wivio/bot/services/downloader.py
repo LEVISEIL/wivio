@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shutil
+import ssl
+import subprocess
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import aiofiles
@@ -17,6 +25,15 @@ from bot.services.errors import DownloadError, FileTooLargeError, RestrictedVide
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 logger = logging.getLogger(__name__)
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".opus", ".ogg", ".wav"}
+INSTAGRAM_PHOTO_SECONDS = 3
+INSTAGRAM_IMAGE_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+)
 
 
 class _YtDlpLogger:
@@ -180,7 +197,7 @@ class VideoDownloader:
         options = {
             "outtmpl": str(job_dir / "%(extractor_key)s-%(id)s.%(ext)s"),
             "format": "b[ext=mp4]/best[ext=mp4]/best",
-            "noplaylist": True,
+            "noplaylist": not _is_instagram_url(url),
             "quiet": True,
             "no_warnings": True,
             "retries": self.retries,
@@ -211,18 +228,62 @@ class VideoDownloader:
             logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
             raise
 
-        candidates = [path for path in downloaded if path.exists()]
-        candidates.extend(
-            path
-            for path in job_dir.iterdir()
-            if path.is_file() and path.suffix.lower() != ".jpg" and path != temporary_cookies_path
+        candidates = _unique_paths(
+            [path for path in downloaded if path.exists()]
+            + [
+                path
+                for path in job_dir.iterdir()
+                if path.is_file()
+                and path != temporary_cookies_path
+                and not path.name.endswith(".part")
+            ]
         )
-        if not candidates:
-            logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
-            raise DownloadError("yt-dlp did not produce a video file")
+        video_candidates = [path for path in candidates if path.suffix.lower() in VIDEO_EXTENSIONS]
+        if video_candidates:
+            video_path = max(video_candidates, key=lambda path: path.stat().st_size)
+            return info, video_path
 
-        video_path = max(candidates, key=lambda path: path.stat().st_size)
-        return info, video_path
+        image_candidates = _sort_media_paths(
+            path for path in candidates if path.suffix.lower() in IMAGE_EXTENSIONS
+        )
+        if not image_candidates and _is_instagram_url(url):
+            image_urls = _extract_instagram_image_urls(info)
+            if not image_urls:
+                image_urls = _fetch_instagram_graphql_image_urls(url)
+            if image_urls:
+                logger.info(
+                    "yt-dlp produced no Instagram media files; downloading images from metadata "
+                    "url=%s images=%s",
+                    url,
+                    len(image_urls),
+                )
+                image_candidates = _download_instagram_images_from_metadata(
+                    job_dir=job_dir,
+                    image_urls=image_urls,
+                    info=info,
+                )
+
+        if image_candidates and _is_instagram_url(url):
+            audio_candidates = [
+                path for path in candidates if path.suffix.lower() in AUDIO_EXTENSIONS
+            ]
+            audio_path = max(audio_candidates, key=lambda path: path.stat().st_size, default=None)
+            video_path = _build_instagram_photo_slideshow(
+                job_dir=job_dir,
+                image_paths=image_candidates,
+                audio_path=audio_path,
+            )
+            logger.info(
+                "Built Instagram photo slideshow url=%s images=%s audio=%s path=%s",
+                url,
+                len(image_candidates),
+                bool(audio_path),
+                video_path,
+            )
+            return info, video_path
+
+        logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
+        raise DownloadError("yt-dlp did not produce a video file")
 
     def _cookies_path_for(self, parsed_url: ParsedVideoUrl) -> Path | None:
         if parsed_url.platform != Platform.INSTAGRAM:
@@ -287,6 +348,369 @@ def _copy_cookiefile(cookies_path: Path, job_dir: Path) -> Path:
     temporary_cookies_path = job_dir / "cookies.txt"
     shutil.copyfile(cookies_path, temporary_cookies_path)
     return temporary_cookies_path
+
+
+def _is_instagram_url(url: str) -> bool:
+    return "instagram.com" in url.lower() or "instagr.am" in url.lower()
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(path)
+    return unique
+
+
+def _sort_media_paths(paths: Iterable[Path]) -> list[Path]:
+    return sorted(paths, key=lambda path: path.name)
+
+
+def _extract_instagram_image_urls(info: dict) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: object) -> None:
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            return
+        if url in seen:
+            return
+        seen.add(url)
+        urls.append(url)
+
+    def best_thumbnail(item: dict) -> str | None:
+        thumbnails = item.get("thumbnails")
+        if not isinstance(thumbnails, list):
+            return None
+        candidates: list[tuple[int, str]] = []
+        for thumbnail in thumbnails:
+            if not isinstance(thumbnail, dict):
+                continue
+            url = thumbnail.get("url")
+            if not isinstance(url, str):
+                continue
+            width = _optional_int(thumbnail.get("width")) or 0
+            height = _optional_int(thumbnail.get("height")) or 0
+            candidates.append((width * height, url))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
+
+    def walk(item: object) -> None:
+        if isinstance(item, dict):
+            entries = item.get("entries")
+            if entries is not None:
+                for entry in entries:
+                    walk(entry)
+                return
+
+            add(best_thumbnail(item))
+            for key in ("display_url", "display_src", "thumbnail", "url"):
+                value = item.get(key)
+                if isinstance(value, str) and _looks_like_image_url(value):
+                    add(value)
+        elif isinstance(item, list):
+            for entry in item:
+                walk(entry)
+
+    walk(info)
+    return urls
+
+
+def _fetch_instagram_graphql_image_urls(url: str) -> list[str]:
+    shortcode = _instagram_shortcode_from_url(url)
+    if not shortcode:
+        return []
+
+    variables = {
+        "shortcode": shortcode,
+        "child_comment_count": 3,
+        "fetch_comment_count": 40,
+        "parent_comment_count": 24,
+        "has_threaded_comments": True,
+    }
+    query = urlencode(
+        {
+            "doc_id": "8845758582119845",
+            "variables": json.dumps(variables, separators=(",", ":")),
+        }
+    )
+    graphql_url = f"https://www.instagram.com/graphql/query/?{query}"
+    request = Request(
+        graphql_url,
+        headers={
+            "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
+            "X-IG-App-ID": "936619743392459",
+            "X-ASBD-ID": "198387",
+            "X-IG-WWW-Claim": "0",
+            "Origin": "https://www.instagram.com",
+            "Accept": "*/*",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": url,
+        },
+    )
+    try:
+        content = _read_url(
+            request,
+            graphql_url,
+            "Instagram GraphQL media",
+            verify_cert=False,
+        )
+        payload = json.loads(content.decode("utf-8"))
+    except (DownloadError, json.JSONDecodeError) as exc:
+        logger.warning("Could not fetch Instagram image metadata url=%s error=%s", url, exc)
+        return []
+
+    media = payload.get("data", {}).get("xdt_shortcode_media")
+    if not isinstance(media, dict):
+        return []
+    return _extract_instagram_media_image_urls(media)
+
+
+def _instagram_shortcode_from_url(url: str) -> str | None:
+    parts = [part for part in urlparse(url).path.split("/") if part]
+    for marker in ("p", "reel", "reels", "tv"):
+        if marker in parts:
+            index = parts.index(marker)
+            if index + 1 < len(parts):
+                return parts[index + 1]
+    return None
+
+
+def _extract_instagram_media_image_urls(media: dict) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str | None) -> None:
+        if not url or url in seen:
+            return
+        seen.add(url)
+        urls.append(url)
+
+    sidecar = media.get("edge_sidecar_to_children")
+    edges = sidecar.get("edges") if isinstance(sidecar, dict) else None
+    if isinstance(edges, list):
+        for edge in edges:
+            node = edge.get("node") if isinstance(edge, dict) else None
+            if isinstance(node, dict) and not node.get("is_video"):
+                add(_best_instagram_media_image_url(node))
+        return urls
+
+    if not media.get("is_video"):
+        add(_best_instagram_media_image_url(media))
+    return urls
+
+
+def _best_instagram_media_image_url(media: dict) -> str | None:
+    candidates: list[tuple[int, str]] = []
+    for image in _instagram_image_candidates(media):
+        url = image.get("url") or image.get("src")
+        if not isinstance(url, str):
+            continue
+        width = _optional_int(image.get("width") or image.get("config_width")) or 0
+        height = _optional_int(image.get("height") or image.get("config_height")) or 0
+        candidates.append((width * height, url))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+
+    for key in ("display_url", "display_src", "thumbnail_src", "thumbnail"):
+        value = media.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _instagram_image_candidates(media: dict) -> list[dict]:
+    candidates: list[dict] = []
+    for key in ("display_resources", "thumbnail_resources"):
+        value = media.get(key)
+        if isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+
+    image_versions = media.get("image_versions2")
+    if isinstance(image_versions, dict):
+        value = image_versions.get("candidates")
+        if isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+    return candidates
+
+
+def _looks_like_image_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(path.endswith(extension) for extension in IMAGE_EXTENSIONS)
+
+
+def _download_instagram_images_from_metadata(
+    job_dir: Path,
+    image_urls: list[str],
+    info: dict,
+) -> list[Path]:
+    headers = _instagram_image_headers(info)
+    items: list[tuple[str, Path]] = []
+    for index, url in enumerate(image_urls, start=1):
+        image_path = job_dir / f"instagram-photo-{index:03d}{_image_suffix_from_url(url)}"
+        items.append((url, image_path))
+
+    max_workers = min(2, len(items))
+    image_paths: list[Path] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            (url, image_path, executor.submit(_download_url_to_path, url, image_path, headers))
+            for url, image_path in items
+        ]
+        for url, image_path, future in futures:
+            try:
+                future.result()
+            except DownloadError as exc:
+                logger.warning(
+                    "Could not download Instagram carousel image url=%s error=%s", url, exc
+                )
+                continue
+            image_paths.append(image_path)
+
+    if not image_paths:
+        raise DownloadError("Could not download any Instagram carousel images")
+    return image_paths
+
+
+def _instagram_image_headers(info: dict) -> dict[str, str]:
+    headers = {
+        "User-Agent": INSTAGRAM_IMAGE_USER_AGENT,
+        "Referer": "https://www.instagram.com/",
+    }
+    info_headers = info.get("http_headers")
+    if isinstance(info_headers, dict):
+        headers.update(
+            {str(key): str(value) for key, value in info_headers.items() if value is not None}
+        )
+    return headers
+
+
+def _image_suffix_from_url(url: str) -> str:
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        return suffix
+    return ".jpg"
+
+
+def _download_url_to_path(url: str, path: Path, headers: dict[str, str]) -> None:
+    request = Request(url, headers=headers)
+    content = _read_url(request, url, "Instagram image", verify_cert=False)
+
+    if not content:
+        raise DownloadError("Instagram image response was empty")
+    path.write_bytes(content)
+
+
+def _read_url(
+    request: Request,
+    url: str,
+    label: str,
+    verify_cert: bool = True,
+) -> bytes:
+    context = None if verify_cert else ssl._create_unverified_context()  # noqa: S323
+    try:
+        with urlopen(request, timeout=20, context=context) as response:
+            return response.read()
+    except URLError as exc:
+        if verify_cert and _is_ssl_certificate_error(exc):
+            logger.warning(
+                "%s request failed during SSL verification, retrying without certificate "
+                "check url=%s error=%s",
+                label,
+                url,
+                exc,
+            )
+            return _read_url(request, url, label, verify_cert=False)
+        raise DownloadError(f"Could not download {label}: {exc}") from exc
+    except (HTTPError, OSError) as exc:
+        raise DownloadError(f"Could not download {label}: {exc}") from exc
+
+
+def _is_ssl_certificate_error(exc: URLError) -> bool:
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(exc)
+
+
+def _build_instagram_photo_slideshow(
+    job_dir: Path,
+    image_paths: list[Path],
+    audio_path: Path | None,
+) -> Path:
+    if not image_paths:
+        raise DownloadError("Instagram photo post did not contain images")
+
+    concat_path = job_dir / "instagram-photo-slideshow.txt"
+    video_path = job_dir / "instagram-photo-slideshow.mp4"
+    concat_path.write_text(_ffmpeg_concat_text(image_paths), encoding="utf-8")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(concat_path.resolve()),
+    ]
+    if audio_path is not None:
+        cmd.extend(["-i", str(audio_path.resolve())])
+
+    cmd.extend(["-map", "0:v:0"])
+    if audio_path is not None:
+        cmd.extend(["-map", "1:a:0", "-shortest"])
+
+    cmd.extend(
+        [
+            "-vf",
+            "scale='min(1080,iw)':-2,pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-r",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-movflags",
+            "+faststart",
+        ]
+    )
+    if audio_path is not None:
+        cmd.extend(["-c:a", "aac", "-b:a", "128k"])
+    cmd.append(str(video_path.resolve()))
+
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
+    except FileNotFoundError as exc:
+        raise DownloadError("ffmpeg is not installed") from exc
+    except subprocess.CalledProcessError as exc:
+        error = (exc.stderr or exc.stdout or str(exc)).strip()
+        raise DownloadError(f"ffmpeg could not build Instagram photo slideshow: {error}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise DownloadError("ffmpeg timed out while building Instagram photo slideshow") from exc
+
+    if not video_path.exists():
+        raise DownloadError("ffmpeg did not produce Instagram photo slideshow")
+    return video_path
+
+
+def _ffmpeg_concat_text(image_paths: list[Path]) -> str:
+    lines = ["ffconcat version 1.0"]
+    for image_path in image_paths:
+        lines.append(f"file '{_escape_ffmpeg_concat_path(image_path.resolve())}'")
+        lines.append(f"duration {INSTAGRAM_PHOTO_SECONDS}")
+    lines.append(f"file '{_escape_ffmpeg_concat_path(image_paths[-1].resolve())}'")
+    return "\n".join(lines) + "\n"
+
+
+def _escape_ffmpeg_concat_path(path: Path) -> str:
+    return str(path).replace("\\", "\\\\").replace("'", "'\\''")
 
 
 def _optional_int(value: object) -> int | None:
