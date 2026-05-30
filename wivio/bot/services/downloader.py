@@ -253,13 +253,12 @@ class VideoDownloader:
                     return _download_tiktok_photo_slideshow_sync(preflight.final_url, job_dir)
                 if preflight.final_url != url and _is_tiktok_url(preflight.final_url):
                     logger.info(
-                        "TikTok preflight resolved non-photo URL url=%s final_url=%s "
-                        "preflight_seconds=%.3f",
+                        "TikTok preflight resolved non-photo URL; using original URL for "
+                        "yt-dlp url=%s final_url=%s preflight_seconds=%.3f",
                         url,
                         preflight.final_url,
                         preflight.seconds,
                     )
-                    url = preflight.final_url
 
         def hook(data: dict) -> None:
             nonlocal media_download_finished_at, media_download_started_at
