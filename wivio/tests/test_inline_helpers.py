@@ -4,6 +4,7 @@ from bot.database.models import CachedVideo
 from bot.handlers.inline import (
     MAX_INLINE_CAPTION_LENGTH,
     MAX_INLINE_READY_WAIT_SECONDS,
+    MAX_SLOW_INLINE_READY_WAIT_SECONDS,
     _brand_footer,
     _cached_video_inline_result,
     _caption_with_brand_footer,
@@ -43,6 +44,7 @@ def test_inline_ready_wait_is_clamped_before_telegram_query_expires() -> None:
     assert _inline_ready_wait_seconds(12) == MAX_INLINE_READY_WAIT_SECONDS
     assert _inline_ready_wait_seconds(4) == 4
     assert _inline_ready_wait_seconds(-1) == 0
+    assert _inline_ready_wait_seconds(12, parsed_url()) == MAX_SLOW_INLINE_READY_WAIT_SECONDS
 
 
 def test_invalid_link_result_explains_supported_links() -> None:
@@ -132,7 +134,7 @@ async def test_wait_for_inline_ready_returns_cached_video() -> None:
     )
 
     assert result == cached_video()
-    assert cache.calls == [(parsed_url(), 42, MAX_INLINE_READY_WAIT_SECONDS)]
+    assert cache.calls == [(parsed_url(), 42, MAX_SLOW_INLINE_READY_WAIT_SECONDS)]
 
 
 @pytest.mark.asyncio

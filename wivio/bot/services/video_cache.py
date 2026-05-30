@@ -60,9 +60,11 @@ class VideoCacheService:
         if cached is not None:
             self._failures.pop(parsed_url.normalized_url, None)
             logger.info(
-                "Cache hit normalized_url=%s user_id=%s",
+                "Video cache hit normalized_url=%s platform=%s user_id=%s file_size=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
+                cached.file_size,
             )
             await self.events.add(
                 parsed_url.normalized_url,
@@ -73,14 +75,23 @@ class VideoCacheService:
             return cached, True
 
         lock = self._locks[parsed_url.normalized_url]
+        logger.info(
+            "Video cache miss normalized_url=%s platform=%s user_id=%s",
+            parsed_url.normalized_url,
+            parsed_url.platform.value,
+            user_id,
+        )
         async with lock:
             cached = await self.videos.get(parsed_url.normalized_url)
             if cached is not None:
                 self._failures.pop(parsed_url.normalized_url, None)
                 logger.info(
-                    "Cache hit after wait normalized_url=%s user_id=%s",
+                    "Video cache hit after wait normalized_url=%s platform=%s user_id=%s "
+                    "file_size=%s",
                     parsed_url.normalized_url,
+                    parsed_url.platform.value,
                     user_id,
+                    cached.file_size,
                 )
                 await self.events.add(
                     parsed_url.normalized_url,
@@ -141,9 +152,11 @@ class VideoCacheService:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is not None:
             logger.info(
-                "Cache hit normalized_url=%s user_id=%s",
+                "Video cache hit normalized_url=%s platform=%s user_id=%s file_size=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
+                cached.file_size,
             )
             await self.events.add(
                 parsed_url.normalized_url,
@@ -154,13 +167,22 @@ class VideoCacheService:
             return cached, "cached"
 
         lock = self._locks[parsed_url.normalized_url]
+        logger.info(
+            "Video cache miss normalized_url=%s platform=%s user_id=%s",
+            parsed_url.normalized_url,
+            parsed_url.platform.value,
+            user_id,
+        )
         async with lock:
             cached = await self.videos.get(parsed_url.normalized_url)
             if cached is not None:
                 logger.info(
-                    "Cache hit after wait normalized_url=%s user_id=%s",
+                    "Video cache hit after wait normalized_url=%s platform=%s user_id=%s "
+                    "file_size=%s",
                     parsed_url.normalized_url,
+                    parsed_url.platform.value,
                     user_id,
+                    cached.file_size,
                 )
                 await self.events.add(
                     parsed_url.normalized_url,
@@ -173,8 +195,9 @@ class VideoCacheService:
             task = self._inflight.get(parsed_url.normalized_url)
             if task is not None and not task.done():
                 logger.info(
-                    "Video already in progress normalized_url=%s user_id=%s",
+                    "Video cache in_progress normalized_url=%s platform=%s user_id=%s",
                     parsed_url.normalized_url,
+                    parsed_url.platform.value,
                     user_id,
                 )
                 await self.events.add(
@@ -188,8 +211,9 @@ class VideoCacheService:
             failure = self._get_recent_failure(parsed_url.normalized_url)
             if failure is not None:
                 logger.info(
-                    "Recent video processing failure normalized_url=%s user_id=%s status=%s",
+                    "Video cache recent_failure normalized_url=%s platform=%s user_id=%s status=%s",
                     parsed_url.normalized_url,
+                    parsed_url.platform.value,
                     user_id,
                     failure.status,
                 )
@@ -214,8 +238,9 @@ class VideoCacheService:
                 )
             )
             logger.info(
-                "Queued background video processing normalized_url=%s user_id=%s",
+                "Video cache queued normalized_url=%s platform=%s user_id=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
             )
             await self.events.add(
@@ -235,17 +260,21 @@ class VideoCacheService:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is not None:
             logger.info(
-                "Cache became ready before wait normalized_url=%s user_id=%s",
+                "Video cache ready before wait normalized_url=%s platform=%s user_id=%s "
+                "file_size=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
+                cached.file_size,
             )
             return cached
 
         task = self._inflight.get(parsed_url.normalized_url)
         if task is None:
             logger.info(
-                "No in-flight task to wait for normalized_url=%s user_id=%s",
+                "No in-flight task to wait for normalized_url=%s platform=%s user_id=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
             )
             return None
@@ -256,8 +285,9 @@ class VideoCacheService:
         except builtins.TimeoutError:
             logger.info(
                 "Video is still processing after inline wait "
-                "normalized_url=%s user_id=%s timeout_seconds=%s",
+                "normalized_url=%s platform=%s user_id=%s timeout_seconds=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
                 wait_timeout,
             )
@@ -265,15 +295,19 @@ class VideoCacheService:
         cached = await self.videos.get(parsed_url.normalized_url)
         if cached is None:
             logger.info(
-                "Video is not cached yet after inline wait normalized_url=%s user_id=%s",
+                "Video cache miss after inline wait normalized_url=%s platform=%s user_id=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
             )
         else:
             logger.info(
-                "Video is ready after inline wait normalized_url=%s user_id=%s",
+                "Video cache ready after inline wait normalized_url=%s platform=%s user_id=%s "
+                "file_size=%s",
                 parsed_url.normalized_url,
+                parsed_url.platform.value,
                 user_id,
+                cached.file_size,
             )
         return cached
 
