@@ -18,21 +18,24 @@ def test_setup_logging_skips_telegram_alert_handler_when_disabled(tmp_path) -> N
 
 
 def test_setup_logging_adds_telegram_alert_handler_when_configured(tmp_path) -> None:
-    setup_logging(
-        tmp_path,
-        "INFO",
-        telegram_alerts_enabled=True,
-        telegram_alert_bot_token="token",
-        telegram_alert_chat_id="-100123",
-        telegram_alert_message_thread_id=777,
-    )
+    try:
+        setup_logging(
+            tmp_path,
+            "INFO",
+            telegram_alerts_enabled=True,
+            telegram_alert_bot_token="token",
+            telegram_alert_chat_id="-100123",
+            telegram_alert_message_thread_id=777,
+        )
 
-    handlers = logging.getLogger().handlers
+        handlers = logging.getLogger().handlers
 
-    alert_handler = next(
-        handler for handler in handlers if isinstance(handler, TelegramAlertHandler)
-    )
-    assert alert_handler.message_thread_id == 777
+        alert_handler = next(
+            handler for handler in handlers if isinstance(handler, TelegramAlertHandler)
+        )
+        assert alert_handler.message_thread_id == 777
+    finally:
+        setup_logging(tmp_path / "reset", "INFO")
 
 
 def test_telegram_alert_handler_truncates_long_messages() -> None:
@@ -56,7 +59,8 @@ def test_telegram_alert_handler_truncates_long_messages() -> None:
     handler.close()
 
     assert len(message) < 4096
-    assert message.endswith("...[truncated]")
+    assert "...[truncated]" in message
+    assert message.endswith("</i>")
 
 
 def test_telegram_alert_handler_formats_readable_alert() -> None:
@@ -141,6 +145,30 @@ def test_telegram_alert_handler_suppresses_duplicate_records() -> None:
 
     assert handler._is_duplicate(record) is False
     assert handler._is_duplicate(record) is True
+    handler.close()
+
+
+def test_telegram_alert_handler_can_skip_internal_warning_records() -> None:
+    handler = TelegramAlertHandler(
+        bot_token="token",
+        chat_id="-100123",
+    )
+    sent_messages: list[str] = []
+    handler._send_message = sent_messages.append  # type: ignore[method-assign]
+    record = logging.LogRecord(
+        name="bot.utils.logging",
+        level=logging.WARNING,
+        pathname="/app/bot/utils/logging.py",
+        lineno=12,
+        msg="Telegram alert delivery failed",
+        args=(),
+        exc_info=None,
+    )
+    record.skip_telegram_alert = True
+
+    handler.emit(record)
+
+    assert sent_messages == []
     handler.close()
 
 

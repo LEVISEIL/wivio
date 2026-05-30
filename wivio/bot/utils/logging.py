@@ -12,6 +12,9 @@ from time import monotonic
 import aiohttp
 
 DEFAULT_ALERT_SUPPRESS_SECONDS = 300
+MAX_TELEGRAM_ALERT_LENGTH = 3900
+MAX_TELEGRAM_TRACEBACK_LENGTH = 2000
+MAX_TELEGRAM_MESSAGE_LENGTH = 1200
 
 
 class TelegramAlertHandler(logging.Handler):
@@ -37,6 +40,8 @@ class TelegramAlertHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            if getattr(record, "skip_telegram_alert", False):
+                return
             if self._is_duplicate(record):
                 return
             message = self._format_message(record)
@@ -50,9 +55,21 @@ class TelegramAlertHandler(logging.Handler):
 
     def _format_message(self, record: logging.LogRecord) -> str:
         message = _format_telegram_alert(record)
-        if len(message) <= 3900:
+        if len(message) <= MAX_TELEGRAM_ALERT_LENGTH:
             return message
-        return f"{message[:3900]}\n...[truncated]"
+        message = _format_telegram_alert(
+            record,
+            traceback_limit=MAX_TELEGRAM_TRACEBACK_LENGTH,
+            truncated_note=True,
+        )
+        if len(message) <= MAX_TELEGRAM_ALERT_LENGTH:
+            return message
+        return _format_telegram_alert(
+            record,
+            include_traceback=False,
+            message_limit=MAX_TELEGRAM_MESSAGE_LENGTH,
+            truncated_note=True,
+        )
 
     def _is_duplicate(self, record: logging.LogRecord) -> bool:
         if self.duplicate_suppress_seconds <= 0:
@@ -70,8 +87,12 @@ class TelegramAlertHandler(logging.Handler):
     def _send_message(self, text: str) -> None:
         try:
             asyncio.run(self._send_message_async(text))
-        except Exception:
-            return
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Telegram alert delivery failed: %s",
+                exc,
+                extra={"skip_telegram_alert": True},
+            )
 
     async def _send_message_async(self, text: str) -> None:
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -91,7 +112,11 @@ class TelegramAlertHandler(logging.Handler):
                 url,
                 data=data,
             ) as response:
-                await response.read()
+                response_text = (await response.text()).strip()
+                if response.status >= 400:
+                    raise RuntimeError(
+                        f"Telegram API returned HTTP {response.status}: {response_text[:500]}"
+                    )
 
 
 def setup_logging(
@@ -179,11 +204,19 @@ def _parse_level(value: str, default: int) -> int:
     return default
 
 
-def _format_telegram_alert(record: logging.LogRecord) -> str:
+def _format_telegram_alert(
+    record: logging.LogRecord,
+    *,
+    include_traceback: bool = True,
+    message_limit: int | None = None,
+    traceback_limit: int | None = None,
+    truncated_note: bool = False,
+) -> str:
     timestamp = datetime.fromtimestamp(record.created, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     if _is_polling_conflict(record):
         return _format_polling_conflict_alert(record, timestamp)
 
+    message = _truncate_text(record.getMessage(), message_limit)
     lines = [
         f"{_level_icon(record.levelno)} <b>Wivio Alert</b>",
         "",
@@ -193,11 +226,14 @@ def _format_telegram_alert(record: logging.LogRecord) -> str:
         f"<b>Location:</b> <code>{_html_escape(record.pathname)}:{record.lineno}</code>",
         "",
         "<b>Message:</b>",
-        f"<code>{_html_escape(record.getMessage())}</code>",
+        f"<code>{_html_escape(message)}</code>",
     ]
-    if record.exc_info:
+    if record.exc_info and include_traceback:
         stacktrace = "".join(traceback.format_exception(*record.exc_info)).strip()
+        stacktrace = _truncate_text(stacktrace, traceback_limit)
         lines.extend(["", "<b>Traceback:</b>", f"<pre>{_html_escape(stacktrace)}</pre>"])
+    if truncated_note:
+        lines.extend(["", "<i>Alert was shortened. Full details are in logs.</i>"])
     return "\n".join(lines)
 
 
@@ -238,3 +274,9 @@ def _html_escape(value: object) -> str:
     return (
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
+
+
+def _truncate_text(value: str, limit: int | None) -> str:
+    if limit is None or len(value) <= limit:
+        return value
+    return f"{value[:limit]}\n...[truncated]"

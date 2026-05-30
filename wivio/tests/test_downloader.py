@@ -318,6 +318,8 @@ def test_download_sync_builds_slideshow_for_instagram_photo_post(
 
     assert info == {"title": "Photo post"}
     assert captured_options["noplaylist"] is False
+    assert captured_options["format"].endswith("/best[ext=mp4]/best")
+    assert captured_options["merge_output_format"] == "mp4"
     assert "-shortest" in captured_cmd
     assert video_path == job_dir / "instagram-photo-slideshow.mp4"
     assert video_path.read_bytes() == b"video"
@@ -641,10 +643,67 @@ def test_detects_tiktok_photo_slideshow_errors() -> None:
     assert not _is_tiktok_photo_slideshow_error("ERROR: [TikTok] 123: This video is private")
 
 
+def test_tiktok_preflight_reads_anonymous_video_carousel_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import _preflight_tiktok_photo_webpage
+
+    payload = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {
+                "itemInfo": {
+                    "itemStruct": {
+                        "imagePost": {
+                            "images": [
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16-common-sign.tiktokcdn.com/photo.jpeg"
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }
+    html = (
+        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+        f"{json.dumps(payload)}"
+        "</script>"
+    )
+    final_url = "https://www.tiktok.com/@/video/7645383480897064225?_r=1"
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def geturl(self) -> str:
+            return final_url
+
+        def read(self) -> bytes:
+            return html.encode()
+
+    monkeypatch.setattr("bot.services.downloader.urlopen", lambda *args, **kwargs: FakeResponse())
+
+    preflight = _preflight_tiktok_photo_webpage("https://vm.tiktok.com/ZNRWvvQFm/")
+
+    assert preflight is not None
+    assert preflight.final_url == final_url
+    assert preflight.html_text == html
+
+
 def test_download_sync_builds_tiktok_slideshow_when_yt_dlp_reports_photo_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
@@ -715,7 +774,7 @@ def test_download_sync_builds_tiktok_slideshow_when_yt_dlp_reports_photo_status(
         timeout: int = 20,
     ) -> None:
         downloaded_urls.append(url)
-        assert timeout == 6
+        assert timeout == 4
         if "slow-one" in url:
             raise DownloadError("network timeout")
         path.write_bytes(b"audio" if path.name.startswith("tiktok-audio") else b"image")
@@ -731,7 +790,14 @@ def test_download_sync_builds_tiktok_slideshow_when_yt_dlp_reports_photo_status(
         Path(cmd[-1]).write_bytes(b"video")
 
     monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
-    monkeypatch.setattr("bot.services.downloader._preflight_tiktok_photo_webpage", lambda url: None)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(
+            html_text=None,
+            final_url="https://www.tiktok.com/@user/video/7645375813709335830",
+            seconds=0.123,
+        ),
+    )
     monkeypatch.setattr(
         "bot.services.downloader._fetch_tiktok_webpage",
         fake_fetch_tiktok_webpage,
@@ -755,6 +821,41 @@ def test_download_sync_builds_tiktok_slideshow_when_yt_dlp_reports_photo_status(
     }
     assert "-shortest" in captured_cmd
     assert video_path == job_dir / "tiktok-photo-slideshow.mp4"
+
+
+def test_download_sync_probes_tiktok_photo_when_preflight_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    video_path = job_dir / "tiktok-photo-slideshow.mp4"
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    captured_probe_url: str | None = None
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            raise AssertionError("yt-dlp should not run when TikTok photo probe succeeds")
+
+    def fake_download_tiktok_photo_slideshow_sync(url: str, job_dir: Path) -> tuple[dict, Path]:
+        nonlocal captured_probe_url
+        captured_probe_url = url
+        video_path.write_bytes(b"video")
+        return {"title": "TikTok carousel", "webpage_url": url}, video_path
+
+    original_url = "https://vm.tiktok.com/ZGdHv9ewL/"
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr("bot.services.downloader._preflight_tiktok_photo_webpage", lambda url: None)
+    monkeypatch.setattr(
+        "bot.services.downloader._download_tiktok_photo_slideshow_sync",
+        fake_download_tiktok_photo_slideshow_sync,
+    )
+
+    info, result_path = downloader._download_sync(original_url, job_dir)
+
+    assert captured_probe_url == original_url
+    assert info["title"] == "TikTok carousel"
+    assert result_path == video_path
 
 
 def test_download_sync_uses_tiktok_photo_fast_path_without_yt_dlp(
@@ -808,7 +909,7 @@ def test_download_sync_uses_tiktok_photo_fast_path_without_yt_dlp(
         timeout: int = 20,
     ) -> None:
         downloaded_urls.append(url)
-        assert timeout == 6
+        assert timeout == 4
         path.write_bytes(b"audio" if path.name.startswith("tiktok-audio") else b"image")
 
     def fake_run(
@@ -900,7 +1001,7 @@ def test_download_sync_uses_tiktok_photo_url_when_preflight_html_is_missing(
         timeout: int = 20,
     ) -> None:
         downloaded_urls.append(url)
-        assert timeout == 6
+        assert timeout == 4
         path.write_bytes(b"image")
 
     def fake_run(
@@ -976,6 +1077,110 @@ def test_download_sync_keeps_original_tiktok_video_url_after_preflight(
     assert captured_url == original_url
     assert info["webpage_url"] == original_url
     assert result_path == video_path
+
+
+def test_download_sync_retries_resolved_tiktok_url_after_short_url_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    video_path = job_dir / "TikTok-123.mp4"
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    captured_urls: list[str] = []
+
+    original_url = "https://vm.tiktok.com/ZGdHv9ewL/"
+    final_url = "https://www.tiktok.com/@user/video/7645375813709335830?_r=1&_t=abc"
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            captured_urls.append(url)
+            if url == original_url:
+                raise YtDlpDownloadError(
+                    "ERROR: [vm.tiktok] ZGdHv9ewL: Unable to download webpage: "
+                    "_ssl.c:993: The handshake operation timed out"
+                )
+            video_path.write_bytes(b"video")
+            return {"title": "TikTok video", "webpage_url": url}
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(html_text=None, final_url=final_url, seconds=0.123),
+    )
+
+    info, result_path = downloader._download_sync(original_url, job_dir)
+
+    assert captured_urls == [original_url, final_url]
+    assert info["webpage_url"] == final_url
+    assert result_path == video_path
+
+
+def test_download_sync_tries_tiktok_photo_fallback_after_audio_only_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    fallback_video_path = job_dir / "tiktok-photo-slideshow.mp4"
+    fallback_url: str | None = None
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            assert url == "https://vm.tiktok.com/ZGdHv9ewL/"
+            (job_dir / "TikTok-123.mp3").write_bytes(b"audio")
+            return {"title": "TikTok audio only"}
+
+    def fake_download_tiktok_photo_slideshow_sync(url: str, job_dir: Path) -> tuple[dict, Path]:
+        nonlocal fallback_url
+        fallback_url = url
+        fallback_video_path.write_bytes(b"video")
+        return {"title": "TikTok carousel", "webpage_url": url}, fallback_video_path
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(
+            html_text=None,
+            final_url="https://www.tiktok.com/@user/video/123",
+            seconds=0.123,
+        ),
+    )
+    monkeypatch.setattr(
+        "bot.services.downloader._download_tiktok_photo_slideshow_sync",
+        fake_download_tiktok_photo_slideshow_sync,
+    )
+
+    info, result_path = downloader._download_sync("https://vm.tiktok.com/ZGdHv9ewL/", job_dir)
+
+    assert fallback_url == "https://vm.tiktok.com/ZGdHv9ewL/"
+    assert info["title"] == "TikTok carousel"
+    assert result_path == fallback_video_path
 
 
 @pytest.mark.asyncio
