@@ -23,8 +23,10 @@ class TelegramUploader:
         async def operation() -> tuple[str, str | None]:
             thumbnail = FSInputFile(video.thumbnail_path) if video.thumbnail_path else None
             logger.info(
-                "Uploading video to Telegram normalized_url=%s upload_chat_id=%s size=%s",
+                "Uploading video to Telegram normalized_url=%s platform=%s upload_chat_id=%s "
+                "size=%s",
                 video.normalized_url,
+                video.platform,
                 self.upload_chat_id,
                 video.file_size,
             )
@@ -56,9 +58,12 @@ class TelegramUploader:
             raise UploadError(str(exc)) from exc
 
         logger.info(
-            "Uploaded video to Telegram normalized_url=%s file_id=%s upload_seconds=%.3f",
+            "Uploaded video to Telegram normalized_url=%s platform=%s file_id=%s size=%s "
+            "upload_seconds=%.3f",
             video.normalized_url,
+            video.platform,
             file_id[:16],
+            video.file_size,
             upload_seconds,
         )
         return file_id, file_unique_id

@@ -33,6 +33,7 @@ BRAND_FOOTER_TEMPLATES = (
 )
 MAX_INLINE_CAPTION_LENGTH = 1024
 MAX_INLINE_READY_WAIT_SECONDS = 8
+MAX_SLOW_INLINE_READY_WAIT_SECONDS = 9
 
 
 class VideoInlineQueryHandler(InlineQueryHandler):
@@ -119,9 +120,10 @@ class VideoInlineQueryHandler(InlineQueryHandler):
 
         if cached is None:
             logger.info(
-                "Inline video is not ready yet user_id=%s normalized_url=%s status=%s",
+                "Inline video cache miss user_id=%s normalized_url=%s platform=%s status=%s",
                 inline_query.from_user.id,
                 parsed.normalized_url,
+                parsed.platform.value,
                 status,
             )
             if status in {FAILED_STATUS, TIMEOUT_STATUS, RESTRICTED_STATUS}:
@@ -178,10 +180,13 @@ class VideoInlineQueryHandler(InlineQueryHandler):
 
         description = f"Cached | {cached.platform.replace('_', ' ').title()}"
         logger.info(
-            "Inline cached video result user_id=%s normalized_url=%s platform=%s",
+            "Inline cached video result user_id=%s normalized_url=%s platform=%s "
+            "cache_status=%s file_size=%s",
             inline_query.from_user.id,
             cached.normalized_url,
             cached.platform,
+            status,
+            cached.file_size,
         )
         await users.increment_success(inline_query.from_user.id)
         await _answer_inline(
@@ -206,7 +211,7 @@ async def _wait_for_inline_ready(
     status: str,
     ready_wait_seconds: int,
 ) -> CachedVideo | None:
-    ready_wait_seconds = _inline_ready_wait_seconds(ready_wait_seconds)
+    ready_wait_seconds = _inline_ready_wait_seconds(ready_wait_seconds, parsed)
     if ready_wait_seconds <= 0:
         return None
 
@@ -309,8 +314,22 @@ def _invalid_link_message() -> str:
     )
 
 
-def _inline_ready_wait_seconds(configured_seconds: int) -> int:
-    return max(0, min(configured_seconds, MAX_INLINE_READY_WAIT_SECONDS))
+def _inline_ready_wait_seconds(
+    configured_seconds: int,
+    parsed: ParsedVideoUrl | None = None,
+) -> int:
+    max_seconds = MAX_INLINE_READY_WAIT_SECONDS
+    if parsed is not None and _uses_extended_inline_wait(parsed):
+        max_seconds = MAX_SLOW_INLINE_READY_WAIT_SECONDS
+    return max(0, min(configured_seconds, max_seconds))
+
+
+def _uses_extended_inline_wait(parsed: ParsedVideoUrl) -> bool:
+    if parsed.platform == Platform.TIKTOK:
+        return True
+    if parsed.platform != Platform.INSTAGRAM:
+        return False
+    return "/p/" in parsed.normalized_url or "/p/" in parsed.original_url
 
 
 def _failed_button(status: str, platform: Platform | str | None = None) -> InlineQueryResultsButton:

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from bot.services.downloader import (
     build_caption,
     html_escape,
 )
-from bot.services.errors import FileTooLargeError, RestrictedVideoError
+from bot.services.errors import DownloadError, FileTooLargeError, RestrictedVideoError
 from bot.utils.urls import ParsedVideoUrl, Platform
 
 
@@ -614,6 +615,323 @@ def test_instagram_metadata_image_download_keeps_successful_images(
         "instagram-photo-001.jpg",
         "instagram-photo-003.jpg",
     ]
+
+
+def test_detects_tiktok_photo_slideshow_errors() -> None:
+    from bot.services.downloader import (
+        _extract_tiktok_photo_url_from_error,
+        _is_tiktok_photo_slideshow_error,
+    )
+
+    unsupported_url_error = (
+        "ERROR: Unsupported URL: "
+        "https://www.tiktok.com/@cdb_2/photo/7625995679378197781?_r=1&_t=abc"
+    )
+
+    assert _is_tiktok_photo_slideshow_error(
+        "ERROR: [TikTok] 7645375813709335830: Video not available, status code 10231"
+    )
+    assert _is_tiktok_photo_slideshow_error(
+        "ERROR: [TikTok] Unsupported URL: https://www.tiktok.com/@user/photo/123"
+    )
+    assert _is_tiktok_photo_slideshow_error(unsupported_url_error)
+    assert _extract_tiktok_photo_url_from_error(unsupported_url_error) == (
+        "https://www.tiktok.com/@cdb_2/photo/7625995679378197781?_r=1&_t=abc"
+    )
+    assert not _is_tiktok_photo_slideshow_error("ERROR: [TikTok] 123: This video is private")
+
+
+def test_download_sync_builds_tiktok_slideshow_when_yt_dlp_reports_photo_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    downloaded_urls: list[str] = []
+    captured_cmd: list[str] = []
+
+    payload = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {
+                "itemInfo": {
+                    "itemStruct": {
+                        "desc": "TikTok carousel",
+                        "imagePost": {
+                            "images": [
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16-common-sign.tiktokcdn.com/slow-one.jpeg",
+                                            "https://p19-common-sign.tiktokcdn.com/one.jpeg",
+                                        ]
+                                    }
+                                },
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16-common-sign.tiktokcdn.com/two.jpeg"
+                                        ]
+                                    }
+                                },
+                            ]
+                        },
+                        "music": {"playUrl": "https://v16m-default.tiktokcdn.com/audio.mp3"},
+                    }
+                }
+            }
+        }
+    }
+    html = (
+        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+        f"{json.dumps(payload)}"
+        "</script>"
+    )
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            assert download is True
+            raise YtDlpDownloadError(
+                "ERROR: Unsupported URL: https://www.tiktok.com/@user/photo/7645375813709335830"
+            )
+
+    def fake_fetch_tiktok_webpage(url: str) -> tuple[str, str]:
+        assert url == "https://www.tiktok.com/@user/photo/7645375813709335830"
+        return html, "https://www.tiktok.com/@user/photo/7645375813709335830"
+
+    def fake_download_bytes_to_path(
+        url: str,
+        path: Path,
+        headers: dict[str, str],
+        timeout: int = 20,
+    ) -> None:
+        downloaded_urls.append(url)
+        assert timeout == 6
+        if "slow-one" in url:
+            raise DownloadError("network timeout")
+        path.write_bytes(b"audio" if path.name.startswith("tiktok-audio") else b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        captured_cmd.extend(cmd)
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr("bot.services.downloader._preflight_tiktok_photo_webpage", lambda url: None)
+    monkeypatch.setattr(
+        "bot.services.downloader._fetch_tiktok_webpage",
+        fake_fetch_tiktok_webpage,
+    )
+    monkeypatch.setattr(
+        "bot.services.downloader._download_bytes_to_path",
+        fake_download_bytes_to_path,
+    )
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    info, video_path = downloader._download_sync("https://vm.tiktok.com/ZGdHv9ewL/", job_dir)
+
+    assert info["title"] == "TikTok carousel"
+    assert info["webpage_url"] == "https://www.tiktok.com/@user/photo/7645375813709335830"
+    assert "thumbnail" not in info
+    assert set(downloaded_urls) == {
+        "https://p16-common-sign.tiktokcdn.com/slow-one.jpeg",
+        "https://p19-common-sign.tiktokcdn.com/one.jpeg",
+        "https://p16-common-sign.tiktokcdn.com/two.jpeg",
+        "https://v16m-default.tiktokcdn.com/audio.mp3",
+    }
+    assert "-shortest" in captured_cmd
+    assert video_path == job_dir / "tiktok-photo-slideshow.mp4"
+
+
+def test_download_sync_uses_tiktok_photo_fast_path_without_yt_dlp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    downloaded_urls: list[str] = []
+
+    payload = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {
+                "itemInfo": {
+                    "itemStruct": {
+                        "desc": "TikTok live photo",
+                        "imagePost": {
+                            "images": [
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16-common-sign.tiktokcdn.com/live.jpeg"
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        "music": {"playUrl": "https://v16m-default.tiktokcdn.com/audio.mp3"},
+                    }
+                }
+            }
+        }
+    }
+    html = (
+        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+        f"{json.dumps(payload)}"
+        "</script>"
+    )
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            raise AssertionError("yt-dlp should not run for TikTok photo fast path")
+
+    def fake_download_bytes_to_path(
+        url: str,
+        path: Path,
+        headers: dict[str, str],
+        timeout: int = 20,
+    ) -> None:
+        downloaded_urls.append(url)
+        assert timeout == 6
+        path.write_bytes(b"audio" if path.name.startswith("tiktok-audio") else b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(
+            html_text=html,
+            final_url="https://www.tiktok.com/@user/photo/7645375813709335830",
+            seconds=0.321,
+        ),
+    )
+    monkeypatch.setattr(
+        "bot.services.downloader._download_bytes_to_path",
+        fake_download_bytes_to_path,
+    )
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    info, video_path = downloader._download_sync("https://vm.tiktok.com/ZGdHv9ewL/", job_dir)
+
+    assert info["title"] == "TikTok live photo"
+    assert set(downloaded_urls) == {
+        "https://p16-common-sign.tiktokcdn.com/live.jpeg",
+        "https://v16m-default.tiktokcdn.com/audio.mp3",
+    }
+    assert video_path == job_dir / "tiktok-photo-slideshow.mp4"
+
+
+def test_download_sync_uses_tiktok_photo_url_when_preflight_html_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    photo_url = "https://www.tiktok.com/@user/photo/7645375813709335830"
+    downloaded_urls: list[str] = []
+
+    payload = {
+        "__DEFAULT_SCOPE__": {
+            "webapp.video-detail": {
+                "itemInfo": {
+                    "itemStruct": {
+                        "desc": "TikTok preflight fallback",
+                        "imagePost": {
+                            "images": [
+                                {
+                                    "imageURL": {
+                                        "urlList": [
+                                            "https://p16-common-sign.tiktokcdn.com/photo.jpeg"
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+    }
+    html = (
+        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+        f"{json.dumps(payload)}"
+        "</script>"
+    )
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            raise AssertionError("yt-dlp should not run after TikTok photo URL preflight")
+
+    def fake_fetch_tiktok_webpage(url: str) -> tuple[str, str]:
+        assert url == photo_url
+        return html, photo_url
+
+    def fake_download_bytes_to_path(
+        url: str,
+        path: Path,
+        headers: dict[str, str],
+        timeout: int = 20,
+    ) -> None:
+        downloaded_urls.append(url)
+        assert timeout == 6
+        path.write_bytes(b"image")
+
+    def fake_run(
+        cmd: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+    ) -> None:
+        Path(cmd[-1]).write_bytes(b"video")
+
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(html_text=None, final_url=photo_url, seconds=5.001),
+    )
+    monkeypatch.setattr(
+        "bot.services.downloader._fetch_tiktok_webpage",
+        fake_fetch_tiktok_webpage,
+    )
+    monkeypatch.setattr(
+        "bot.services.downloader._download_bytes_to_path",
+        fake_download_bytes_to_path,
+    )
+    monkeypatch.setattr("bot.services.downloader.subprocess.run", fake_run)
+
+    info, video_path = downloader._download_sync("https://vm.tiktok.com/ZGdHv9ewL/", job_dir)
+
+    assert info["title"] == "TikTok preflight fallback"
+    assert downloaded_urls == ["https://p16-common-sign.tiktokcdn.com/photo.jpeg"]
+    assert video_path == job_dir / "tiktok-photo-slideshow.mp4"
 
 
 @pytest.mark.asyncio
