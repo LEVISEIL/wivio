@@ -934,6 +934,50 @@ def test_download_sync_uses_tiktok_photo_url_when_preflight_html_is_missing(
     assert video_path == job_dir / "tiktok-photo-slideshow.mp4"
 
 
+def test_download_sync_keeps_original_tiktok_video_url_after_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from bot.services.downloader import TikTokPhotoPreflight
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    video_path = job_dir / "TikTok-123.mp4"
+    downloader = VideoDownloader(tmp_path, max_video_size_bytes=100, retries=1)
+    captured_url: str | None = None
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict) -> None:
+            pass
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def extract_info(self, url: str, download: bool) -> dict:
+            nonlocal captured_url
+            assert download is True
+            captured_url = url
+            video_path.write_bytes(b"video")
+            return {"title": "TikTok video", "webpage_url": url}
+
+    original_url = "https://vm.tiktok.com/ZGdHv9ewL/"
+    final_url = "https://www.tiktok.com/@user/video/7645375813709335830?_r=1&_t=abc"
+    monkeypatch.setattr("bot.services.downloader.YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(
+        "bot.services.downloader._preflight_tiktok_photo_webpage",
+        lambda url: TikTokPhotoPreflight(html_text=None, final_url=final_url, seconds=0.123),
+    )
+
+    info, result_path = downloader._download_sync(original_url, job_dir)
+
+    assert captured_url == original_url
+    assert info["webpage_url"] == original_url
+    assert result_path == video_path
+
+
 @pytest.mark.asyncio
 async def test_download_logs_alertable_error_for_instagram_auth_failure(
     tmp_path: Path,
