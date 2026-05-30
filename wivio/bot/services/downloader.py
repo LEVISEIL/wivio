@@ -380,7 +380,7 @@ class VideoDownloader:
 def build_caption(title: str, platform: str, url: str) -> str:
     platform_title = platform.replace("_", " ").title()
     safe_url = html_escape(url)
-    return f'{platform_title} | <a href="{safe_url}">source</a>'
+    return f'{platform_title} | <a href="{safe_url}">Источник</a>'
 
 
 def html_escape(value: str) -> str:

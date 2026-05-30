@@ -98,7 +98,7 @@ def test_cached_video_result_adds_brand_footer_to_caption() -> None:
     )
 
     assert "<b>Cached</b>" not in result.caption
-    assert 'Tiktok | <a href="https://vm.tiktok.com/ZNRnPAR4S/">source</a>' in result.caption
+    assert 'Tiktok | <a href="https://vm.tiktok.com/ZNRnPAR4S/">Источник</a>' in result.caption
     assert "@wivio_bot</a>" in result.caption
     assert "https://t.me/wivio_bot" in result.caption
 
