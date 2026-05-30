@@ -8,7 +8,7 @@ import shutil
 import ssl
 import subprocess
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from html import unescape as html_unescape
 from pathlib import Path
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".opus", ".ogg", ".wav"}
+YTDLP_VIDEO_FORMAT = "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/bv*[ext=mp4]/bv*/best[ext=mp4]/best"
 INSTAGRAM_PHOTO_SECONDS = 2
 INSTAGRAM_SLIDESHOW_FPS = 15
 INSTAGRAM_SLIDESHOW_MAX_WIDTH = 900
@@ -39,7 +40,8 @@ INSTAGRAM_IMAGE_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
-TIKTOK_MEDIA_TIMEOUT_SECONDS = 6
+TIKTOK_MEDIA_TIMEOUT_SECONDS = 4
+TIKTOK_IMAGE_WORKERS = 6
 TIKTOK_PHOTO_PREFLIGHT_TIMEOUT_SECONDS = 5
 TIKTOK_PHOTO_FETCH_TIMEOUT_SECONDS = 10
 TIKTOK_WEB_USER_AGENT = (
@@ -217,12 +219,14 @@ class VideoDownloader:
         job_dir: Path,
         cookies_path: Path | None = None,
     ) -> tuple[dict, Path]:
+        original_url = url
         downloaded: list[Path] = []
         media_download_started_at: float | None = None
         media_download_finished_at: float | None = None
         ytdlp_total_seconds = 0.0
         extract_seconds = 0.0
         media_download_seconds = 0.0
+        tiktok_resolved_video_url: str | None = None
 
         if _is_tiktok_url(url):
             preflight = _preflight_tiktok_photo_webpage(url)
@@ -259,6 +263,21 @@ class VideoDownloader:
                         preflight.final_url,
                         preflight.seconds,
                     )
+                    tiktok_resolved_video_url = preflight.final_url
+            else:
+                probe_started_at = monotonic()
+                try:
+                    return _download_tiktok_photo_slideshow_sync(url, job_dir)
+                except DownloadError as exc:
+                    if not _is_tiktok_photo_probe_miss(str(exc)):
+                        raise
+                    logger.info(
+                        "TikTok direct photo probe missed; continuing with yt-dlp "
+                        "url=%s probe_seconds=%.3f error=%s",
+                        url,
+                        monotonic() - probe_started_at,
+                        exc,
+                    )
 
         def hook(data: dict) -> None:
             nonlocal media_download_finished_at, media_download_started_at
@@ -273,7 +292,8 @@ class VideoDownloader:
 
         options = {
             "outtmpl": str(job_dir / "%(extractor_key)s-%(id)s.%(ext)s"),
-            "format": "b[ext=mp4]/best[ext=mp4]/best",
+            "format": YTDLP_VIDEO_FORMAT,
+            "merge_output_format": "mp4",
             "noplaylist": not _is_instagram_url(url),
             "quiet": True,
             "no_warnings": True,
@@ -357,8 +377,55 @@ class VideoDownloader:
                     exc,
                 )
                 return _download_tiktok_photo_slideshow_sync(fallback_url, job_dir)
-            logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
-            raise
+            if (
+                tiktok_resolved_video_url
+                and tiktok_resolved_video_url != url
+                and _is_tiktok_transport_error(error)
+            ):
+                logger.warning(
+                    "yt-dlp failed on original TikTok URL; retrying resolved URL "
+                    "url=%s retry_url=%s error=%s",
+                    url,
+                    tiktok_resolved_video_url,
+                    exc,
+                )
+                url = tiktok_resolved_video_url
+                downloaded.clear()
+                media_download_started_at = None
+                media_download_finished_at = None
+                try:
+                    ytdlp_started_at = monotonic()
+                    with YoutubeDL(options) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                    ytdlp_total_seconds = monotonic() - ytdlp_started_at
+                    if (
+                        media_download_started_at is not None
+                        and media_download_finished_at is not None
+                    ):
+                        media_download_seconds = (
+                            media_download_finished_at - media_download_started_at
+                        )
+                    else:
+                        media_download_seconds = 0.0
+                    extract_seconds = max(0.0, ytdlp_total_seconds - media_download_seconds)
+                    logger.info(
+                        "yt-dlp video timings url=%s extract_seconds=%.3f "
+                        "media_download_seconds=%.3f ytdlp_total_seconds=%.3f retry=true",
+                        url,
+                        extract_seconds,
+                        media_download_seconds,
+                        ytdlp_total_seconds,
+                    )
+                except Exception:
+                    logger.exception(
+                        "yt-dlp retry with resolved TikTok URL failed url=%s job_dir=%s",
+                        url,
+                        job_dir,
+                    )
+                    raise
+            else:
+                logger.exception("yt-dlp extract_info failed url=%s job_dir=%s", url, job_dir)
+                raise
 
         candidates = _unique_paths(
             [path for path in downloaded if path.exists()]
@@ -436,6 +503,29 @@ class VideoDownloader:
             )
             return info, video_path
 
+        if _is_tiktok_url(original_url):
+            audio_candidates = [
+                path for path in candidates if path.suffix.lower() in AUDIO_EXTENSIONS
+            ]
+            logger.info(
+                "yt-dlp produced no TikTok video file; trying photo fallback "
+                "url=%s current_url=%s audio_files=%s job_dir=%s",
+                original_url,
+                url,
+                len(audio_candidates),
+                job_dir,
+            )
+            try:
+                return _download_tiktok_photo_slideshow_sync(original_url, job_dir)
+            except DownloadError as exc:
+                logger.warning(
+                    "TikTok photo fallback after missing video failed url=%s "
+                    "current_url=%s error=%s",
+                    original_url,
+                    url,
+                    exc,
+                )
+
         logger.error("yt-dlp did not produce a video file url=%s job_dir=%s", url, job_dir)
         raise DownloadError("yt-dlp did not produce a video file")
 
@@ -482,7 +572,7 @@ class VideoDownloader:
 def build_caption(title: str, platform: str, url: str) -> str:
     platform_title = platform.replace("_", " ").title()
     safe_url = html_escape(url)
-    return f'{platform_title} | <a href="{safe_url}">source</a>'
+    return f'{platform_title} | <a href="{safe_url}">Источник</a>'
 
 
 def html_escape(value: str) -> str:
@@ -516,6 +606,13 @@ def _is_tiktok_photo_url(url: str) -> bool:
     if not _is_tiktok_url(url):
         return False
     return "photo" in {part.lower() for part in urlparse(url).path.split("/") if part}
+
+
+def _is_tiktok_anonymous_video_url(url: str) -> bool:
+    if not _is_tiktok_url(url):
+        return False
+    parts = [part.lower() for part in urlparse(url).path.split("/") if part]
+    return len(parts) >= 3 and parts[0] == "@" and parts[1] == "video"
 
 
 def _instagram_fallback_info(url: str) -> dict:
@@ -918,7 +1015,10 @@ def _preflight_tiktok_photo_webpage(url: str) -> TikTokPhotoPreflight | None:
             context=ssl._create_unverified_context(),  # noqa: S323
         ) as response:
             final_url = response.geturl()
-            if not _is_tiktok_photo_url(final_url):
+            should_read_html = _is_tiktok_photo_url(final_url) or _is_tiktok_anonymous_video_url(
+                final_url
+            )
+            if not should_read_html:
                 return TikTokPhotoPreflight(
                     html_text=None,
                     final_url=final_url,
@@ -943,8 +1043,11 @@ def _preflight_tiktok_photo_webpage(url: str) -> TikTokPhotoPreflight | None:
         logger.debug("TikTok photo preflight failed url=%s error=%s", url, exc)
         return None
 
+    html_text = content.decode("utf-8", errors="replace")
     return TikTokPhotoPreflight(
-        html_text=content.decode("utf-8", errors="replace"),
+        html_text=html_text
+        if _is_tiktok_photo_url(final_url) or _tiktok_html_contains_photo_post(html_text)
+        else None,
         final_url=final_url,
         seconds=monotonic() - started_at,
     )
@@ -963,6 +1066,18 @@ def _extract_tiktok_photo_post(html_text: str, final_url: str) -> TikTokPhotoPos
                 webpage_url=_clean_string(item.get("webpage_url")) or final_url,
             )
     raise DownloadError("Could not find TikTok photo carousel metadata")
+
+
+def _tiktok_html_contains_photo_post(html_text: str) -> bool:
+    for payload in _extract_tiktok_json_payloads(html_text):
+        for item in _find_tiktok_item_structs(payload):
+            image_post = item.get("imagePost")
+            if not isinstance(image_post, dict):
+                continue
+            images = image_post.get("images")
+            if isinstance(images, list) and images:
+                return True
+    return False
 
 
 def _extract_tiktok_json_payloads(html_text: str) -> list[dict]:
@@ -1091,7 +1206,7 @@ def _download_tiktok_images(
         image_path = job_dir / f"tiktok-photo-{index:03d}{_image_suffix_from_url(urls[0])}"
         items.append((urls, image_path))
 
-    max_workers = min(4, len(items))
+    max_workers = min(TIKTOK_IMAGE_WORKERS, len(items))
     image_paths: list[Path] = []
     failed_count = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1179,8 +1294,8 @@ def _download_tiktok_media_candidates(
     if not urls:
         raise DownloadError("TikTok media candidate list was empty")
 
-    last_error: DownloadError | None = None
-    for candidate_index, url in enumerate(urls, start=1):
+    if len(urls) == 1:
+        url = urls[0]
         try:
             _download_bytes_to_path(
                 url,
@@ -1189,19 +1304,68 @@ def _download_tiktok_media_candidates(
                 timeout=TIKTOK_MEDIA_TIMEOUT_SECONDS,
             )
         except DownloadError as exc:
-            last_error = exc
             logger.warning(
                 "TikTok media candidate failed url=%s path=%s candidate=%s candidates=%s "
                 "timeout_seconds=%s error=%s",
                 url,
                 path,
-                candidate_index,
-                len(urls),
+                1,
+                1,
                 TIKTOK_MEDIA_TIMEOUT_SECONDS,
                 exc,
             )
-            continue
+            raise DownloadError(f"Could not download TikTok media from 1 candidate: {exc}") from exc
         return url
+
+    last_error: DownloadError | None = None
+    futures: dict[Future[None], tuple[int, str, Path]] = {}
+    executor = ThreadPoolExecutor(max_workers=min(len(urls), 3))
+    shutdown_started = False
+    try:
+        for candidate_index, url in enumerate(urls, start=1):
+            candidate_path = path.with_name(f"{path.stem}.candidate-{candidate_index}{path.suffix}")
+            candidate_path.unlink(missing_ok=True)
+            futures[
+                executor.submit(
+                    _download_bytes_to_path,
+                    url,
+                    candidate_path,
+                    headers,
+                    TIKTOK_MEDIA_TIMEOUT_SECONDS,
+                )
+            ] = (candidate_index, url, candidate_path)
+
+        pending = set(futures)
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                candidate_index, url, candidate_path = futures[future]
+                try:
+                    future.result()
+                except DownloadError as exc:
+                    last_error = exc
+                    logger.warning(
+                        "TikTok media candidate failed url=%s path=%s candidate=%s candidates=%s "
+                        "timeout_seconds=%s error=%s",
+                        url,
+                        path,
+                        candidate_index,
+                        len(urls),
+                        TIKTOK_MEDIA_TIMEOUT_SECONDS,
+                        exc,
+                    )
+                    candidate_path.unlink(missing_ok=True)
+                    continue
+
+                candidate_path.replace(path)
+                for pending_future in pending:
+                    pending_future.cancel()
+                executor.shutdown(wait=False, cancel_futures=True)
+                shutdown_started = True
+                return url
+    finally:
+        if not shutdown_started:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     raise DownloadError(
         f"Could not download TikTok media from {len(urls)} candidates: {last_error}"
@@ -1532,6 +1696,26 @@ def _is_tiktok_photo_slideshow_error(error: str) -> bool:
         "video not available, status code 10240",
     )
     return "[tiktok]" in text and any(marker in text for marker in status_markers)
+
+
+def _is_tiktok_photo_probe_miss(error: str) -> bool:
+    text = error.lower()
+    markers = (
+        "could not fetch tiktok photo page",
+        "could not find tiktok photo carousel metadata",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _is_tiktok_transport_error(error: str) -> bool:
+    text = error.lower()
+    markers = (
+        "unable to download webpage",
+        "handshake operation timed out",
+        "transporterror",
+        "timed out",
+    )
+    return any(marker in text for marker in markers)
 
 
 def _extract_tiktok_photo_url_from_error(error: str) -> str | None:
